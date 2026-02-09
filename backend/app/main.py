@@ -242,18 +242,51 @@ async def get_customer_anomalies(customer_id: str) -> AnomalyResponse:
     # Convert to response format
     anomaly_details = []
     for anomaly in anomalies[:5]:  # Return top 5
+        # Get transaction details if available
+        anomaly_idx = anomaly.get("index", 0)
+        if anomaly_idx < len(customer_df):
+            trans = customer_df.iloc[anomaly_idx]
+            transaction_dict = {
+                "transaction_id": str(anomaly_idx),
+                "customer_id": trans["customer_id"],
+                "date": trans["date"].strftime("%Y-%m-%d"),
+                "amount": float(trans["amount"]),
+                "mcc": trans["mcc"],
+                "mcc_category": trans["mcc_category"],
+                "channel": trans["channel"],
+                "merchant": trans["merchant"],
+                "country": trans["country"]
+            }
+        else:
+            # Fallback with placeholder data
+            transaction_dict = {
+                "transaction_id": "N/A",
+                "customer_id": customer_id,
+                "date": anomaly["date"],
+                "amount": 0.0,
+                "mcc": "0000",
+                "mcc_category": "UNKNOWN",
+                "channel": "UNKNOWN",
+                "merchant": "Unknown",
+                "country": "GB"
+            }
+
         explanation = ExplainabilityEngine.explain_anomaly(
             anomaly["type"],
             anomaly["score"],
-            {},
+            transaction_dict,
             feature_vector
         )
+
+        # Ensure explanation has required fields
+        if "prediction" not in explanation:
+            explanation["prediction"] = anomaly["type"]
 
         anomaly_details.append({
             "date": anomaly["date"],
             "anomaly_type": anomaly["type"],
             "anomaly_score": anomaly["score"],
-            "transaction": {},
+            "transaction": transaction_dict,
             "explanation": explanation
         })
 

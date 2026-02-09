@@ -32,10 +32,10 @@ class TrendResponse(BaseModel):
 
 
 class SHAPExplanation(BaseModel):
-    prediction: str
-    confidence: float
-    top_drivers: List[str]
-    shap_values: Dict[str, float]
+    prediction: Optional[str] = None
+    confidence: Optional[float] = None
+    top_drivers: List[str] = []
+    shap_values: Dict[str, float] = {}
 
 
 class AnomalyDetail(BaseModel):

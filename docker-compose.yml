@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # Backend API Service
+  backend:
+    build: ./backend
+    container_name: spending-analysis-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/transactions.db
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./backend/data:/app/data
+    networks:
+      - ml-poc-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Frontend Application
+  frontend:
+    build: ./frontend
+    container_name: spending-analysis-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - ml-poc-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost/ 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  ml-poc-network:
+    driver: bridge
+
+volumes:
+  backend-data:
+    driver: local
