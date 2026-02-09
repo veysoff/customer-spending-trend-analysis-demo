@@ -153,3 +153,62 @@ class SyntheticDataGenerator:
         df = pd.DataFrame(records)
         df["date"] = pd.to_datetime(df["date"])
         return df.sort_values(["customer_id", "date"]).reset_index(drop=True)
+
+    def save_to_db(self, db_session, batch_size: int = 1000):
+        """Save generated data to database in batches.
+
+        Args:
+            db_session: SQLAlchemy session
+            batch_size: Number of records to insert per batch
+
+        Note: Requires db_session to have Transaction and Customer models imported.
+        """
+        from sqlalchemy.orm import Session
+        from ..db.models import Customer, Transaction
+
+        # Generate data
+        df = self.generate()
+
+        # Extract unique customers and insert
+        customers_df = df[["customer_id", "pattern"]].drop_duplicates()
+        customers_to_insert = []
+
+        for _, row in customers_df.iterrows():
+            customer_transactions = df[df["customer_id"] == row["customer_id"]]
+            customer = Customer(
+                id=row["customer_id"],
+                pattern=row["pattern"],
+                first_transaction_date=customer_transactions["date"].min(),
+                last_transaction_date=customer_transactions["date"].max(),
+            )
+            customers_to_insert.append(customer)
+
+        db_session.bulk_save_objects(customers_to_insert)
+        db_session.commit()
+
+        # Insert transactions in batches
+        transactions_batch = []
+        for _, row in df.iterrows():
+            transaction_dict = {
+                "id": row["transaction_id"],
+                "customer_id": row["customer_id"],
+                "date": row["date"],
+                "amount": row["amount"],
+                "mcc": row["mcc"],
+                "mcc_category": row["mcc_category"],
+                "channel": row["channel"],
+                "merchant": row["merchant"],
+                "country": row["country"],
+                "time_of_day": row["time_of_day"],
+            }
+            transactions_batch.append(transaction_dict)
+
+            if len(transactions_batch) >= batch_size:
+                db_session.bulk_insert_mappings(Transaction, transactions_batch)
+                db_session.commit()
+                transactions_batch = []
+
+        # Insert remaining
+        if transactions_batch:
+            db_session.bulk_insert_mappings(Transaction, transactions_batch)
+            db_session.commit()

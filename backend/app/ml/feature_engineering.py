@@ -7,8 +7,30 @@ class FeatureEngineer:
     """Extract features from transaction data."""
 
     @staticmethod
-    def engineer_features(customer_df: pd.DataFrame) -> Dict[str, Any]:
-        """Engineer all features for a customer."""
+    def engineer_features(customer_df) -> Dict[str, Any]:
+        """Engineer all features for a customer.
+
+        Args:
+            customer_df: pandas DataFrame or list of ORM Transaction objects
+
+        Returns:
+            Dictionary of engineered features
+        """
+        # Convert ORM objects to DataFrame if needed
+        if isinstance(customer_df, list) and len(customer_df) > 0:
+            if hasattr(customer_df[0], '__tablename__'):  # ORM object detection
+                customer_df = pd.DataFrame([{
+                    'customer_id': t.customer_id,
+                    'date': t.date,
+                    'amount': t.amount,
+                    'mcc': t.mcc,
+                    'mcc_category': t.mcc_category,
+                    'channel': t.channel,
+                    'merchant': t.merchant,
+                    'country': t.country,
+                    'time_of_day': t.time_of_day
+                } for t in customer_df])
+
         features = {}
 
         # Aggregate by month

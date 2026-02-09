@@ -9,7 +9,9 @@ MODELS_DIR = DATA_DIR / "models"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/transactions.db")
+# Database configuration
+DATABASE_PATH = DATA_DIR / "spending.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH}")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # ML Configuration

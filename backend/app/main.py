@@ -1,14 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import logging
 from pathlib import Path
+from sqlalchemy.orm import Session
 
 from . import config
 from .models import (
     GenerateDataRequest, GenerateDataResponse,
     CustomerProfileResponse, TrendResponse, AnomalyResponse, AtRiskResponse
 )
+from .db import initialize_database, get_db, CustomerRepository, TransactionRepository
 from .ml.data_generator import SyntheticDataGenerator
 from .ml.feature_engineering import FeatureEngineer
 from .ml.trend_detection import TrendDetector
@@ -34,90 +36,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global state
-_data: pd.DataFrame = None
-_anomaly_detector: AnomalyDetector = None
-
-
-def load_or_generate_data() -> pd.DataFrame:
-    """Load existing data or generate new."""
-    global _data, _anomaly_detector
-
-    data_path = config.DATA_DIR / "transactions.csv"
-
-    if data_path.exists():
-        logger.info("Loading existing transaction data")
-        _data = pd.read_csv(data_path)
-        _data["date"] = pd.to_datetime(_data["date"])
-        _train_anomaly_detector()
-        return _data
-
-    logger.info("No data found. Generating synthetic data...")
-    return _generate_and_save_data()
-
-
-def _generate_and_save_data() -> pd.DataFrame:
-    """Generate synthetic data and save to CSV."""
-    global _data, _anomaly_detector
-
-    generator = SyntheticDataGenerator(
-        n_customers=config.N_CUSTOMERS,
-        n_months=config.N_MONTHS
-    )
-
-    logger.info(f"Generating {config.N_CUSTOMERS} customers × {config.N_MONTHS} months")
-    _data = generator.generate()
-
-    # Save to CSV
-    data_path = config.DATA_DIR / "transactions.csv"
-    _data.to_csv(data_path, index=False)
-    logger.info(f"Data saved to {data_path}")
-
-    _train_anomaly_detector()
-    return _data
-
-
-def _train_anomaly_detector():
-    """Train Isolation Forest on all customer data."""
-    global _data, _anomaly_detector
-
-    logger.info("Training anomaly detector")
-    _anomaly_detector = AnomalyDetector(
-        contamination=config.ISOLATION_FOREST_CONTAMINATION,
-        n_estimators=config.ISOLATION_FOREST_N_ESTIMATORS
-    )
-
-    # Collect features for all customers
-    all_features = []
-    for customer_id in _data["customer_id"].unique()[:100]:  # Sample for speed
-        customer_df = _data[_data["customer_id"] == customer_id].sort_values("date")
-        features = AnomalyDetector.get_anomaly_features(customer_df)
-        all_features.append(features[0])
-
-    if all_features:
-        features_array = pd.DataFrame(all_features).fillna(0).values
-        _anomaly_detector.fit(features_array)
-        logger.info(f"Anomaly detector trained on {len(all_features)} customers")
-
 
 @app.on_event("startup")
 async def startup():
-    """Load or generate data on startup."""
-    load_or_generate_data()
+    """Initialize database on startup."""
+    logger.info("Initializing database...")
+    initialize_database()
     logger.info("API ready")
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(db: Session = Depends(get_db)):
     """Health check endpoint."""
-    return {"status": "healthy", "data_loaded": _data is not None}
+    try:
+        customer_count = db.query(CustomerRepository(db).get_customer_count()).scalar()
+        return {"status": "healthy", "database_ready": True, "customer_count": customer_count}
+    except Exception as e:
+        return {"status": "unhealthy", "database_ready": False, "error": str(e)}
 
 
 @app.post("/api/data/generate", response_model=GenerateDataResponse)
-async def generate_data(request: GenerateDataRequest) -> GenerateDataResponse:
+async def generate_data(request: GenerateDataRequest, db: Session = Depends(get_db)) -> GenerateDataResponse:
     """Generate synthetic transaction data."""
-    global _data, _anomaly_detector
-
     logger.info(f"Generating {request.n_customers} customers for {request.months} months")
 
     generator = SyntheticDataGenerator(
@@ -125,38 +65,45 @@ async def generate_data(request: GenerateDataRequest) -> GenerateDataResponse:
         n_months=request.months
     )
 
-    _data = generator.generate()
+    df = generator.generate()
 
-    # Save to CSV
-    data_path = config.DATA_DIR / "transactions.csv"
-    _data.to_csv(data_path, index=False)
-
-    # Train detector
-    _train_anomaly_detector()
-
-    # Calculate distribution
+    # Calculate distribution before saving
     distribution = {}
     for pattern in ["normal", "silent_churn", "lifestyle_shift"]:
-        count = len(_data[_data.get("pattern") == pattern])
-        distribution[pattern] = count / len(_data) if len(_data) > 0 else 0
+        count = len(df[df.get("pattern") == pattern])
+        distribution[pattern] = count / len(df) if len(df) > 0 else 0
+
+    logger.info(f"Generated {len(df)} transactions with distribution: {distribution}")
 
     return GenerateDataResponse(
         status="Generated",
-        n_records=len(_data),
+        n_records=len(df),
         distribution=distribution
     )
 
 
 @app.get("/api/customers/{customer_id}", response_model=CustomerProfileResponse)
-async def get_customer_profile(customer_id: str) -> CustomerProfileResponse:
+async def get_customer_profile(customer_id: str, db: Session = Depends(get_db)) -> CustomerProfileResponse:
     """Get customer profile with risk assessment."""
-    if _data is None:
-        raise HTTPException(status_code=500, detail="Data not loaded")
+    repo = CustomerRepository(db)
+    trans_repo = TransactionRepository(db)
 
-    customer_df = _data[_data["customer_id"] == customer_id].sort_values("date")
-
-    if len(customer_df) == 0:
+    customer, transactions = repo.get_customer_with_transactions(customer_id)
+    if not customer or not transactions:
         raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+    # Convert ORM objects to DataFrame for ML pipeline
+    customer_df = pd.DataFrame([{
+        'customer_id': t.customer_id,
+        'date': t.date,
+        'amount': t.amount,
+        'mcc': t.mcc,
+        'mcc_category': t.mcc_category,
+        'channel': t.channel,
+        'merchant': t.merchant,
+        'country': t.country,
+        'time_of_day': t.time_of_day
+    } for t in transactions]).sort_values("date")
 
     # Extract features
     feature_engineer = FeatureEngineer()
@@ -193,15 +140,26 @@ async def get_customer_profile(customer_id: str) -> CustomerProfileResponse:
 
 
 @app.get("/api/customers/{customer_id}/trends", response_model=TrendResponse)
-async def get_customer_trends(customer_id: str) -> TrendResponse:
+async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -> TrendResponse:
     """Get spending trend forecast."""
-    if _data is None:
-        raise HTTPException(status_code=500, detail="Data not loaded")
+    repo = CustomerRepository(db)
+    _, transactions = repo.get_customer_with_transactions(customer_id)
 
-    customer_df = _data[_data["customer_id"] == customer_id].sort_values("date")
-
-    if len(customer_df) == 0:
+    if not transactions:
         raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+    # Convert to DataFrame
+    customer_df = pd.DataFrame([{
+        'customer_id': t.customer_id,
+        'date': t.date,
+        'amount': t.amount,
+        'mcc': t.mcc,
+        'mcc_category': t.mcc_category,
+        'channel': t.channel,
+        'merchant': t.merchant,
+        'country': t.country,
+        'time_of_day': t.time_of_day
+    } for t in transactions]).sort_values("date")
 
     trend_detector = TrendDetector()
     trend_result = trend_detector.detect_trend(customer_df, periods_ahead=3)
@@ -225,19 +183,34 @@ async def get_customer_trends(customer_id: str) -> TrendResponse:
 
 
 @app.get("/api/customers/{customer_id}/anomalies", response_model=AnomalyResponse)
-async def get_customer_anomalies(customer_id: str) -> AnomalyResponse:
+async def get_customer_anomalies(customer_id: str, db: Session = Depends(get_db)) -> AnomalyResponse:
     """Get detected anomalies with explanations."""
-    if _data is None or _anomaly_detector is None:
-        raise HTTPException(status_code=500, detail="Data or model not loaded")
+    repo = CustomerRepository(db)
+    _, transactions = repo.get_customer_with_transactions(customer_id)
 
-    customer_df = _data[_data["customer_id"] == customer_id].sort_values("date")
-
-    if len(customer_df) == 0:
+    if not transactions:
         raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
 
+    # Convert to DataFrame
+    customer_df = pd.DataFrame([{
+        'customer_id': t.customer_id,
+        'date': t.date,
+        'amount': t.amount,
+        'mcc': t.mcc,
+        'mcc_category': t.mcc_category,
+        'channel': t.channel,
+        'merchant': t.merchant,
+        'country': t.country,
+        'time_of_day': t.time_of_day
+    } for t in transactions]).sort_values("date")
+
     # Detect anomalies
+    anomaly_detector = AnomalyDetector(
+        contamination=config.ISOLATION_FOREST_CONTAMINATION,
+        n_estimators=config.ISOLATION_FOREST_N_ESTIMATORS
+    )
     feature_vector = AnomalyDetector.get_anomaly_features(customer_df)
-    anomalies = _anomaly_detector.detect(customer_df, feature_vector)
+    anomalies = anomaly_detector.detect(customer_df, feature_vector)
 
     # Convert to response format
     anomaly_details = []
@@ -297,16 +270,34 @@ async def get_customer_anomalies(customer_id: str) -> AnomalyResponse:
 
 
 @app.get("/api/customers/risk/high", response_model=AtRiskResponse)
-async def get_high_risk_customers() -> AtRiskResponse:
+async def get_high_risk_customers(db: Session = Depends(get_db)) -> AtRiskResponse:
     """Get list of high-risk customers."""
-    if _data is None:
-        raise HTTPException(status_code=500, detail="Data not loaded")
+    repo = CustomerRepository(db)
+    customers = repo.get_all(limit=None)  # Get all customers
+
+    if not customers:
+        raise HTTPException(status_code=500, detail="No customers found in database")
 
     at_risk = []
     churn_risks = []
 
-    for customer_id in _data["customer_id"].unique():
-        customer_df = _data[_data["customer_id"] == customer_id].sort_values("date")
+    for customer in customers:
+        _, transactions = repo.get_customer_with_transactions(customer.id)
+        if not transactions:
+            continue
+
+        # Convert to DataFrame
+        customer_df = pd.DataFrame([{
+            'customer_id': t.customer_id,
+            'date': t.date,
+            'amount': t.amount,
+            'mcc': t.mcc,
+            'mcc_category': t.mcc_category,
+            'channel': t.channel,
+            'merchant': t.merchant,
+            'country': t.country,
+            'time_of_day': t.time_of_day
+        } for t in transactions]).sort_values("date")
 
         feature_engineer = FeatureEngineer()
         features = feature_engineer.engineer_features(customer_df)
@@ -319,7 +310,7 @@ async def get_high_risk_customers() -> AtRiskResponse:
 
         if churn_risk >= 0.6:  # High risk threshold
             at_risk.append({
-                "customer_id": customer_id,
+                "customer_id": customer.id,
                 "churn_risk": churn_risk,
                 "risk_category": _get_risk_category(churn_risk),
                 "primary_signal": _get_primary_signal(trend_result["trend_slope"], features),

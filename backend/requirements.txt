@@ -7,3 +7,5 @@ prophet>=1.1.0
 shap>=0.43.0
 pydantic>=2.5.0
 python-dateutil>=2.8.0
+sqlalchemy>=2.0.0
+alembic>=1.13.0
