@@ -2,8 +2,8 @@
 
 import logging
 from sqlalchemy.orm import Session
-from .database import engine, SessionLocal, create_tables
-from .models import Base, Customer, Transaction
+from .database import SessionLocal, create_tables
+from .models import Customer, Transaction
 from ..ml.data_generator import SyntheticDataGenerator
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ def initialize_database():
         if customer_count == 0:
             logger.info("Database empty. Generating synthetic data...")
             _generate_synthetic_data(db)
-            logger.info(f"Data generation complete")
+            logger.info("Data generation complete")
         else:
             logger.info(f"Database has {customer_count} customers. Skipping generation.")
     except Exception as e:

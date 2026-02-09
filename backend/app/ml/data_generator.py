@@ -29,7 +29,8 @@ class SyntheticDataGenerator:
         self.n_customers = n_customers
         self.n_months = n_months
         self.seed = seed
-        np.random.seed(seed)
+        # Use a local random generator to avoid affecting global numpy state
+        self.rng = np.random.default_rng(seed)
 
     def _get_pattern_type(self, customer_idx: int) -> str:
         """Assign behavior pattern to customer."""
@@ -43,7 +44,7 @@ class SyntheticDataGenerator:
 
     def _generate_monthly_spending(self, pattern: str, month: int) -> float:
         """Generate monthly spending based on pattern."""
-        base = np.random.normal(5000, 500)
+        base = self.rng.normal(5000, 500)
 
         # Seasonal adjustment
         if month == 12:  # December
@@ -72,22 +73,22 @@ class SyntheticDataGenerator:
 
         # Transaction frequency varies
         if pattern == "silent_churn":
-            n_transactions = max(int(np.random.normal(25, 5)), 10)
+            n_transactions = max(int(self.rng.normal(25, 5)), 10)
         else:
-            n_transactions = int(np.random.normal(30, 5))
+            n_transactions = int(self.rng.normal(30, 5))
 
         for _ in range(n_transactions):
-            day = np.random.randint(1, days_in_month + 1)
-            hour = np.random.randint(0, 24)
-            minute = np.random.randint(0, 60)
+            day = self.rng.integers(1, days_in_month + 1)
+            hour = self.rng.integers(0, 24)
+            minute = self.rng.integers(0, 60)
 
-            amount = np.random.lognormal(np.log(50), 0.5)  # Lognormal distribution
+            amount = self.rng.lognormal(np.log(50), 0.5)  # Lognormal distribution
             amount = min(amount, monthly_spending)
 
-            mcc = np.random.choice(list(self.MCC_CATEGORIES.keys()))
-            channel = np.random.choice(self.CHANNELS)
-            merchant = np.random.choice(self.MERCHANTS)
-            country = np.random.choice(self.COUNTRIES)
+            mcc = self.rng.choice(list(self.MCC_CATEGORIES.keys()))
+            channel = self.rng.choice(self.CHANNELS)
+            merchant = self.rng.choice(self.MERCHANTS)
+            country = self.rng.choice(self.COUNTRIES)
 
             transactions.append((
                 day, hour, minute, amount, mcc, channel, merchant, country
@@ -100,7 +101,7 @@ class SyntheticDataGenerator:
         # Increase GROCERY, decrease RESTAURANTS and AIRLINES
         adjusted = []
         for mcc in mcc_list:
-            if np.random.random() < 0.3:  # 30% chance to change
+            if self.rng.random() < 0.3:  # 30% chance to change
                 if mcc in ["5812", "4511"]:  # RESTAURANTS, AIRLINES
                     adjusted.append("5411")  # Switch to GROCERY
                 else:

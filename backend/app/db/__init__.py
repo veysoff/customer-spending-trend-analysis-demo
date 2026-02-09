@@ -2,7 +2,7 @@
 
 from .database import engine, SessionLocal, get_db, Base
 from .models import Customer, Transaction, CustomerRiskProfile
-from .repositories import CustomerRepository, TransactionRepository
+from .repositories import CustomerRepository, TransactionRepository, RiskProfileRepository
 from .init_db import initialize_database
 
 __all__ = [
@@ -15,5 +15,6 @@ __all__ = [
     "CustomerRiskProfile",
     "CustomerRepository",
     "TransactionRepository",
+    "RiskProfileRepository",
     "initialize_database",
 ]

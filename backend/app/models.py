@@ -1,6 +1,5 @@
-from pydantic import BaseModel
-from datetime import date
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
 
 
 class TransactionResponse(BaseModel):
@@ -77,9 +76,12 @@ class AtRiskResponse(BaseModel):
 
 
 class GenerateDataRequest(BaseModel):
-    n_customers: int = 1000
-    months: int = 12
-    patterns: List[str] = ["normal", "silent_churn", "lifestyle_shift"]
+    n_customers: int = Field(default=1000, ge=1, le=10000, description="Number of customers to generate")
+    months: int = Field(default=12, ge=1, le=60, description="Number of months of data")
+    patterns: List[str] = Field(
+        default_factory=lambda: ["normal", "silent_churn", "lifestyle_shift"],
+        description="Customer behavior patterns"
+    )
 
 
 class GenerateDataResponse(BaseModel):

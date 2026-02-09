@@ -1,10 +1,13 @@
 """SQLAlchemy ORM models for banking data."""
 
-from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, Index
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Index
+from sqlalchemy.orm import DeclarativeBase, relationship
+from datetime import datetime, timezone
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Base class for all ORM models."""
+    pass
 
 
 class Customer(Base):
@@ -16,7 +19,10 @@ class Customer(Base):
     pattern = Column(String(20), nullable=False)  # normal, silent_churn, lifestyle_shift
     first_transaction_date = Column(DateTime, nullable=True)
     last_transaction_date = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationship for eager loading
+    transactions = relationship("Transaction", back_populates="customer", lazy="dynamic")
 
     # Indexes
     __table_args__ = (
@@ -43,6 +49,9 @@ class Transaction(Base):
     country = Column(String(2), nullable=False)
     time_of_day = Column(String(5), nullable=False)
 
+    # Relationship for back reference
+    customer = relationship("Customer", back_populates="transactions")
+
     # Composite index for customer time series queries
     __table_args__ = (
         Index("idx_customer_date", "customer_id", "date"),
@@ -62,8 +71,8 @@ class CustomerRiskProfile(Base):
     risk_category = Column(String(20), default="LOW")  # LOW, MEDIUM, HIGH, CRITICAL
     primary_signal = Column(String(200), nullable=True)
     recommended_action = Column(String(500), nullable=True)
-    calculated_at = Column(DateTime, default=datetime.utcnow)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    calculated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_updated = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     def __repr__(self):
         return f"<CustomerRiskProfile(customer_id={self.customer_id}, risk={self.risk_category})>"

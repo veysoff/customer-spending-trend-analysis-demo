@@ -1,8 +1,10 @@
+from contextlib import asynccontextmanager
+from typing import Generator, List, Optional
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import logging
-from pathlib import Path
 from sqlalchemy.orm import Session
 
 from . import config
@@ -11,6 +13,7 @@ from .models import (
     CustomerProfileResponse, TrendResponse, AnomalyResponse, AtRiskResponse
 )
 from .db import initialize_database, get_db, CustomerRepository, TransactionRepository
+from .db.models import Transaction
 from .ml.data_generator import SyntheticDataGenerator
 from .ml.feature_engineering import FeatureEngineer
 from .ml.trend_detection import TrendDetector
@@ -21,98 +24,109 @@ from .ml.explainability import ExplainabilityEngine
 logging.basicConfig(level=config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
+# Allowed CORS origins (restrict in production)
+ALLOWED_ORIGINS: List[str] = [
+    origin.strip()
+    for origin in config.ALLOWED_ORIGINS.split(",")
+    if origin.strip()
+]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: startup and shutdown events."""
+    logger.info("Initializing database...")
+    initialize_database()
+    logger.info("API ready")
+    yield
+    logger.info("Shutting down")
+
+
 app = FastAPI(
     title="Customer Spending Trend Analysis API",
     description="ML-powered banking analytics PoC",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup():
-    """Initialize database on startup."""
-    logger.info("Initializing database...")
-    initialize_database()
-    logger.info("API ready")
 
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     """Health check endpoint."""
     try:
-        customer_count = db.query(CustomerRepository(db).get_customer_count()).scalar()
+        customer_count = CustomerRepository(db).get_customer_count()
         return {"status": "healthy", "database_ready": True, "customer_count": customer_count}
     except Exception as e:
-        return {"status": "unhealthy", "database_ready": False, "error": str(e)}
+        logger.error("Health check failed: %s", e, exc_info=True)
+        return {"status": "unhealthy", "database_ready": False, "error": "Database unavailable"}
 
 
 @app.post("/api/data/generate", response_model=GenerateDataResponse)
-async def generate_data(request: GenerateDataRequest, db: Session = Depends(get_db)) -> GenerateDataResponse:
-    """Generate synthetic transaction data."""
-    logger.info(f"Generating {request.n_customers} customers for {request.months} months")
+async def generate_data(
+    request: GenerateDataRequest, db: Session = Depends(get_db)
+) -> GenerateDataResponse:
+    """Generate synthetic transaction data and persist to database."""
+    logger.info(
+        "Generating %d customers for %d months",
+        request.n_customers,
+        request.months,
+    )
 
     generator = SyntheticDataGenerator(
         n_customers=request.n_customers,
-        n_months=request.months
+        n_months=request.months,
     )
 
     df = generator.generate()
 
     # Calculate distribution before saving
-    distribution = {}
+    distribution: dict[str, float] = {}
     for pattern in ["normal", "silent_churn", "lifestyle_shift"]:
-        count = len(df[df.get("pattern") == pattern])
+        count = len(df[df["pattern"] == pattern])
         distribution[pattern] = count / len(df) if len(df) > 0 else 0
 
-    logger.info(f"Generated {len(df)} transactions with distribution: {distribution}")
+    # Persist generated data to the database
+    generator.save_to_db(db)
+    logger.info("Generated %d transactions with distribution: %s", len(df), distribution)
 
     return GenerateDataResponse(
         status="Generated",
         n_records=len(df),
-        distribution=distribution
+        distribution=distribution,
     )
 
 
 @app.get("/api/customers/{customer_id}", response_model=CustomerProfileResponse)
-async def get_customer_profile(customer_id: str, db: Session = Depends(get_db)) -> CustomerProfileResponse:
+async def get_customer_profile(
+    customer_id: str, db: Session = Depends(get_db)
+) -> CustomerProfileResponse:
     """Get customer profile with risk assessment."""
     repo = CustomerRepository(db)
-    trans_repo = TransactionRepository(db)
 
     customer, transactions = repo.get_customer_with_transactions(customer_id)
     if not customer or not transactions:
-        raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Customer {customer_id} not found"
+        )
 
-    # Convert ORM objects to DataFrame for ML pipeline
-    customer_df = pd.DataFrame([{
-        'customer_id': t.customer_id,
-        'date': t.date,
-        'amount': t.amount,
-        'mcc': t.mcc,
-        'mcc_category': t.mcc_category,
-        'channel': t.channel,
-        'merchant': t.merchant,
-        'country': t.country,
-        'time_of_day': t.time_of_day
-    } for t in transactions]).sort_values("date")
+    customer_df = _transactions_to_dataframe(transactions)
 
     # Extract features
-    feature_engineer = FeatureEngineer()
-    features = feature_engineer.engineer_features(customer_df)
+    features = FeatureEngineer.engineer_features(customer_df)
 
     # Detect trend
     trend_detector = TrendDetector(
         yearly_seasonality=config.PROPHET_YEARLY_SEASONALITY,
-        weekly_seasonality=config.PROPHET_WEEKLY_SEASONALITY
+        weekly_seasonality=config.PROPHET_WEEKLY_SEASONALITY,
     )
     trend_result = trend_detector.detect_trend(customer_df)
     trend_slope = trend_result["trend_slope"]
@@ -129,13 +143,13 @@ async def get_customer_profile(customer_id: str, db: Session = Depends(get_db)) 
         total_transactions=len(customer_df),
         date_range=[
             customer_df["date"].min().strftime("%Y-%m-%d"),
-            customer_df["date"].max().strftime("%Y-%m-%d")
+            customer_df["date"].max().strftime("%Y-%m-%d"),
         ],
         current_monthly_spending=features["current_monthly_spending"],
         spending_trend=trend_category,
         churn_risk=churn_risk,
         behavior_change=behavior_change,
-        risk_category=_get_risk_category(churn_risk)
+        risk_category=_get_risk_category(churn_risk),
     )
 
 

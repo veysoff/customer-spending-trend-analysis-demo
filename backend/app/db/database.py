@@ -1,17 +1,19 @@
 """Database connection and session management."""
 
+from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 
 from ..config import DATABASE_URL
 from .models import Base
 
-# Create SQLite engine with special settings for FastAPI
+# Create SQLite engine with NullPool for better concurrent request handling
+# NullPool doesn't pool connections, creating new ones per request (safer for SQLite)
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False},  # SQLite-specific: allow multi-threaded access
-    poolclass=StaticPool,  # Use static pool for consistent connections
+    poolclass=NullPool,  # No connection pooling for SQLite (safest under concurrent ASGI)
 )
 
 # Session factory
@@ -22,7 +24,7 @@ SessionLocal = sessionmaker(
 )
 
 
-def get_db() -> Session:
+def get_db() -> Generator[Session, None, None]:
     """Dependency for FastAPI to inject database sessions.
 
     Usage in endpoints:
