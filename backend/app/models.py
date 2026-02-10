@@ -24,7 +24,7 @@ class TransactionResponse(BaseModel):
 
 class TrendDataPoint(BaseModel):
     date: str
-    actual: float
+    actual: Optional[float] = None
     forecast: float
     lower_bound: float
     upper_bound: float

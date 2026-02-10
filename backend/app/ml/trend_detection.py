@@ -61,9 +61,9 @@ class TrendDetector:
         """Format forecast output."""
         data = []
 
-        # Only return historical + 3 months forecast
+        # Return all forecast data (historical + future forecast)
         actual_len = len(actual)
-        for i in range(min(actual_len, len(forecast))):
+        for i in range(len(forecast)):  # Show ALL forecast rows (not limited by actual_len)
             row = forecast.iloc[i]
             if i < actual_len:
                 actual_val = actual.iloc[i]["y"]

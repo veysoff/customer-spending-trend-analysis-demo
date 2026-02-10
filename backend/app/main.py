@@ -191,7 +191,8 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
     } for t in transactions]).sort_values("date")
 
     trend_detector = TrendDetector()
-    trend_result = trend_detector.detect_trend(customer_df, periods_ahead=3)
+    # Forecast 90 days ahead (~3 months) for better visibility
+    trend_result = trend_detector.detect_trend(customer_df, periods_ahead=90)
 
     return TrendResponse(
         customer_id=customer_id,
