@@ -7,14 +7,20 @@ from .database import SessionLocal, create_tables
 from .models import Customer, Transaction
 from ..ml.persona_registry import PERSONA_REGISTRY
 from ..ml.data_generator import SyntheticDataGenerator
+from ..ml.demo_personas import DEMO_PERSONAS_REGISTRY
+from .. import config
 
 logger = logging.getLogger(__name__)
 
 
 def initialize_database():
-    """Create tables and seed synthetic data + personas if empty (idempotent).
+    """Create tables and seed demo personas + synthetic data if empty (idempotent).
 
     Safe to call multiple times - checks if data exists before generating.
+
+    Generation order:
+    1. Generate 40 named demo personas (with diverse patterns & edge cases)
+    2. Generate remaining background customers (config.N_CUSTOMERS - 40)
     """
     # Create all tables
     logger.info("Creating database tables...")
@@ -27,9 +33,17 @@ def initialize_database():
         total_customers = db.query(Customer).count()
 
         if total_customers == 0:
-            logger.info("No customers found. Generating synthetic data with churn patterns...")
-            _generate_synthetic_data_with_churn(db)
-            logger.info("Synthetic data generation complete")
+            logger.info("No customers found. Generating demo personas and synthetic data...")
+
+            # 1. Generate 40 demo personas first (named, with specific patterns)
+            logger.info("Step 1: Generating 40 named demo personas...")
+            _generate_demo_personas(db)
+
+            # 2. Generate background customers
+            logger.info("Step 2: Generating background customers...")
+            _generate_synthetic_data_with_churn(db, background_only=True)
+
+            logger.info("Data generation complete")
         else:
             logger.info(f"Database has {total_customers} customers. Skipping generation.")
     except Exception as e:
@@ -39,19 +53,118 @@ def initialize_database():
         db.close()
 
 
-def _generate_synthetic_data_with_churn(db: Session):
-    """Generate 1000 synthetic customers with churn patterns and credit metrics.
+def _generate_demo_personas(db: Session):
+    """Generate 40 named demo personas with diverse patterns.
+
+    Each persona demonstrates a different customer behavior:
+    - 8 Stable customers (low risk, consistent)
+    - 8 At-Risk customers (warning signs)
+    - 8 Anomaly customers (unusual patterns)
+    - 6 Growth customers (positive trends)
+    - 10 Advanced edge cases (travelers, crypto, gamblers, business owners, etc.)
+    """
+    logger.info(f"Generating {len(DEMO_PERSONAS_REGISTRY)} demo personas...")
+
+    start_date = datetime(2024, 1, 1)
+    end_date = datetime(2024, 12, 31)
+
+    total_transactions = 0
+    total_personas = 0
+
+    for persona_id, PersonaClass in DEMO_PERSONAS_REGISTRY.items():
+        # Create deterministic customer IDs for personas
+        customer_id = f"persona_{PersonaClass.NAME.lower().replace('_', '_')}"
+
+        logger.info(f"Generating {PersonaClass.NAME} (persona_id: {persona_id})...")
+
+        try:
+            # Generate persona instance
+            persona = PersonaClass(customer_id=customer_id, seed=1000 + persona_id)
+
+            # Generate transactions
+            transactions = persona.generate_transactions(start_date, end_date)
+            total_transactions += len(transactions)
+
+            # Create customer record
+            customer = Customer(
+                id=customer_id,
+                pattern=f"persona_{PersonaClass.TIER}",
+                persona_id=persona_id,
+                persona_name=PersonaClass.NAME,
+                persona_tier=PersonaClass.TIER,
+                persona_seed=1000 + persona_id,
+                narrative=PersonaClass.NARRATIVE,
+                expected_risk_score=PersonaClass.EXPECTED_RISK_SCORE,
+                generation_timestamp=datetime.utcnow(),
+                first_transaction_date=min(t['date'] for t in transactions) if transactions else None,
+                last_transaction_date=max(t['date'] for t in transactions) if transactions else None,
+                created_at=datetime.utcnow(),
+            )
+
+            db.add(customer)
+            db.flush()
+
+            # Insert transactions in batches
+            if transactions:
+                batch_size = 500
+                tx_counter = 0
+                for i in range(0, len(transactions), batch_size):
+                    batch = transactions[i : i + batch_size]
+                    # Add transaction IDs (required for primary key)
+                    for tx in batch:
+                        tx["id"] = f"{customer_id}_{tx_counter}"
+                        tx_counter += 1
+                    db.bulk_insert_mappings(Transaction, batch)
+                    db.commit()
+
+                logger.info(f"  ✅ {PersonaClass.NAME}: {len(transactions)} transactions")
+            else:
+                db.commit()
+                logger.warning(f"  ⚠️  {PersonaClass.NAME}: No transactions generated")
+
+            total_personas += 1
+
+        except Exception as e:
+            logger.error(f"Error generating persona {PersonaClass.NAME}: {e}")
+            db.rollback()
+            raise
+
+    logger.info(
+        f"✅ Generated {total_personas} demo personas with {total_transactions} total transactions"
+    )
+
+
+def _generate_synthetic_data_with_churn(db: Session, background_only: bool = False):
+    """Generate synthetic customers with churn patterns and credit metrics.
+
+    Uses config values: N_CUSTOMERS, N_MONTHS (default: 1000, 12)
+
+    Args:
+        db: Database session
+        background_only: If True, generates (N_CUSTOMERS - 30) background customers.
+                        If False, generates all N_CUSTOMERS.
 
     Distribution:
-    - 400 stable (no churn)
-    - 300 churning (churned, high risk)
-    - 200 at_risk (no churn but warning signs)
-    - 100 churned (long-term inactive)
+    - 40% stable (no churn)
+    - 30% churning (churned, high risk)
+    - 20% at_risk (no churn but warning signs)
+    - 10% churned (long-term inactive)
     """
-    logger.info("Generating 1000 synthetic customers with churn patterns...")
+    n_to_generate = config.N_CUSTOMERS
+    if background_only:
+        # Reserve 30 slots for demo personas
+        n_to_generate = max(0, config.N_CUSTOMERS - 30)
 
-    # Generate synthetic data using updated SyntheticDataGenerator
-    generator = SyntheticDataGenerator(n_customers=1000, n_months=12, seed=42)
+    if n_to_generate <= 0:
+        logger.info("No background customers to generate (all slots reserved for demo personas)")
+        return
+
+    logger.info(
+        f"Generating {n_to_generate} background synthetic customers ({config.N_MONTHS} months) with churn patterns..."
+    )
+
+    # Generate synthetic data using calculated values
+    generator = SyntheticDataGenerator(n_customers=n_to_generate, n_months=config.N_MONTHS, seed=42)
 
     logger.info("Saving synthetic data to database...")
     generator.save_to_db(db)

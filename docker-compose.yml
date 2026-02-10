@@ -11,8 +11,10 @@ services:
       - DATABASE_URL=sqlite:///./data/spending.db
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
+      - MODEL_PATH=/app/ml/models
     volumes:
       - ./backend/data:/app/data
+      - ./backend/app/ml/models:/app/ml/models
     networks:
       - ml-poc-network
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --access-log
@@ -22,6 +24,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Frontend Application
   frontend:

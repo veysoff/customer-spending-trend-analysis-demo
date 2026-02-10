@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import ApexCharts from 'apexcharts'
 
 const props = defineProps({
@@ -36,13 +36,17 @@ const props = defineProps({
   }
 })
 
+const chartInstance = ref(null)
+
 const trendClass = computed(() => {
   if (props.trends.trend_slope > 50) return 'text-green-600'
   if (props.trends.trend_slope < -50) return 'text-red-600'
   return 'text-gray-600'
 })
 
-onMounted(() => {
+const renderChart = () => {
+  if (!props.trends || !props.trends.trend_data) return
+
   const dates = props.trends.trend_data.map(d => d.date)
   const actuals = props.trends.trend_data.map(d => d.actual || null)
   const forecasts = props.trends.trend_data.map(d => d.forecast)
@@ -115,7 +119,20 @@ onMounted(() => {
     }
   ]
 
-  const chart = new ApexCharts(document.getElementById('trend-chart'), { ...options, series })
-  chart.render()
-})
+  const chartElement = document.getElementById('trend-chart')
+  if (!chartElement) return
+
+  // Destroy old chart if exists
+  if (chartInstance.value) {
+    chartInstance.value.destroy()
+  }
+
+  chartInstance.value = new ApexCharts(chartElement, { ...options, series })
+  chartInstance.value.render()
+}
+
+onMounted(renderChart)
+
+// Watch for prop changes and re-render chart
+watch(() => props.trends, renderChart, { deep: true })
 </script>

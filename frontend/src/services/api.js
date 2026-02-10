@@ -44,9 +44,41 @@ export const apiService = {
     return response.data
   },
 
+  // Get all customers from database
+  async getAllCustomers() {
+    const response = await api.get('/api/customers')
+    return response.data
+  },
+
   // Get personas
   async getPersonas() {
     const response = await api.get('/api/personas')
+    return response.data
+  },
+
+  // ========== Phase 5D: Churn Prediction API Methods ==========
+
+  // Train/retrain churn model
+  async trainChurnModel() {
+    const response = await api.post('/api/ml/train-churn-model')
+    return response.data
+  },
+
+  // Get single customer churn prediction with SHAP explanation
+  async getChurnPrediction(customerId) {
+    const response = await api.get(`/api/customers/${customerId}/churn-prediction`)
+    return response.data
+  },
+
+  // Get batch churn predictions for all customers
+  async predictAllChurn() {
+    const response = await api.post('/api/ml/predict-all-churn')
+    return response.data
+  },
+
+  // Get feature importance ranking from trained model
+  async getFeatureImportance() {
+    const response = await api.get('/api/ml/churn-model/feature-importance')
     return response.data
   },
 

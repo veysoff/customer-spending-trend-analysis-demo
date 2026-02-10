@@ -14,6 +14,10 @@ export const useCustomerStore = defineStore('customer', () => {
   const error = ref(null)
   const dataGenerated = ref(false)
 
+  // Cache for customer data to prevent redundant API calls
+  const dataCache = new Map()
+  let loadingTimeout = null
+
   // Computed
   const selectedCustomer = computed(() =>
     customers.value.find(c => c.customer_id === selectedCustomerId.value)
@@ -33,38 +37,30 @@ export const useCustomerStore = defineStore('customer', () => {
   })
 
   // Actions
-  async function generateData(n_customers = 1000, months = 12) {
-    loading.value = true
-    error.value = null
-    try {
-      const result = await apiService.generateData(n_customers, months)
-      dataGenerated.value = true
-
-      // Generate sample customer list (IDs only)
-      customers.value = Array.from({ length: 50 }, (_, i) => ({
-        customer_id: `customer_${String(i).padStart(6, '0')}`,
-        name: `Customer ${i + 1}`,
-        status: 'active'
-      }))
-
-      selectedCustomerId.value = customers.value[0].customer_id
-      return result
-    } catch (err) {
-      error.value = err.message
-      throw err
-    } finally {
-      loading.value = false
-    }
-  }
-
   async function selectCustomer(customerId) {
     selectedCustomerId.value = customerId
     await loadCustomerData(customerId)
   }
 
   async function loadCustomerData(customerId) {
+    // Return cached data if available
+    if (dataCache.has(customerId)) {
+      const cached = dataCache.get(customerId)
+      customerProfile.value = cached.profile
+      customerTrends.value = cached.trends
+      customerAnomalies.value = cached.anomalies
+      console.log(`[Cache] Loaded ${customerId} from cache (avoiding redundant API calls)`)
+      return
+    }
+
     loading.value = true
     error.value = null
+
+    // Cancel any pending load
+    if (loadingTimeout) {
+      clearTimeout(loadingTimeout)
+    }
+
     try {
       const [profile, trends, anomalies] = await Promise.all([
         apiService.getCustomerProfile(customerId),
@@ -75,6 +71,10 @@ export const useCustomerStore = defineStore('customer', () => {
       customerProfile.value = profile
       customerTrends.value = trends
       customerAnomalies.value = anomalies
+
+      // Cache the data for future selections
+      dataCache.set(customerId, { profile, trends, anomalies })
+      console.log(`[Cache] Stored ${customerId} in cache for future selections`)
     } catch (err) {
       error.value = err.message
       throw err
@@ -87,19 +87,15 @@ export const useCustomerStore = defineStore('customer', () => {
     loading.value = true
     error.value = null
     try {
-      const data = await apiService.getPersonas()
-      customers.value = data.personas.map((persona, index) => ({
-        customer_id: `${1000 + persona.id}`,
-        name: persona.name,
-        persona: persona.name,
-        narrative: persona.narrative,
-        expected_risk: persona.expected_risk_score,
-        status: 'active'
-      }))
+      // Load actual database customers from API
+      const response = await apiService.getAllCustomers()
+      customers.value = response.customers || []
       dataGenerated.value = true
-      return data
+      console.log(`Loaded ${customers.value.length} customers from database`)
+      return response
     } catch (err) {
       error.value = err.message
+      console.error('Failed to load customers:', err)
       throw err
     } finally {
       loading.value = false
@@ -121,6 +117,12 @@ export const useCustomerStore = defineStore('customer', () => {
     }
   }
 
+  // Clear cache when needed (e.g., after data refresh)
+  function clearDataCache() {
+    dataCache.clear()
+    console.log('[Cache] Cleared all cached customer data')
+  }
+
   return {
     // State
     customers,
@@ -138,10 +140,10 @@ export const useCustomerStore = defineStore('customer', () => {
     riskDistribution,
 
     // Actions
-    generateData,
     selectCustomer,
     loadCustomerData,
     loadCustomers,
-    loadHighRiskCustomers
+    loadHighRiskCustomers,
+    clearDataCache
   }
 })

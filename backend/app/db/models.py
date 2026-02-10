@@ -24,6 +24,7 @@ class Customer(Base):
     # Persona metadata (nullable for backward compatibility)
     persona_id = Column(Integer, nullable=True)
     persona_name = Column(String(50), nullable=True)
+    persona_tier = Column(String(20), nullable=True)  # stable, at_risk, anomaly, growth
     persona_seed = Column(Integer, nullable=True)
     narrative = Column(String(1000), nullable=True)
     expected_risk_score = Column(Float, nullable=True)

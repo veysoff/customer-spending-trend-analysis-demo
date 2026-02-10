@@ -2,6 +2,19 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 
 
+class CustomerListItem(BaseModel):
+    """Single customer in list response."""
+    customer_id: str
+    name: Optional[str] = None
+    status: str = "active"
+
+
+class CustomerListResponse(BaseModel):
+    """Response for list of all customers."""
+    total: int
+    customers: List[CustomerListItem]
+
+
 class PersonaMetadata(BaseModel):
     """Persona metadata for a customer."""
     persona_id: Optional[int] = None
@@ -97,3 +110,58 @@ class GenerateDataResponse(BaseModel):
     status: str
     n_records: int
     distribution: Dict[str, float]
+
+
+# ============================================================================
+# Phase 5D: Churn Prediction API Response Models
+# ============================================================================
+
+class ChurnPredictionDetail(BaseModel):
+    """Detailed SHAP explanation for a churn prediction."""
+    feature_name: str
+    feature_value: float
+    shap_value: float
+    contribution_direction: str  # "increases_churn" or "decreases_churn"
+
+
+class ChurnPredictionResponse(BaseModel):
+    """Response for single customer churn prediction."""
+    customer_id: str
+    churn_probability: float
+    churn_prediction: str  # "churned" or "stable"
+    confidence: float
+    top_5_factors: List[ChurnPredictionDetail] = []
+    account_metrics: Dict[str, float] = {}
+
+
+class BatchChurnPredictionResponse(BaseModel):
+    """Response for batch churn predictions across all customers."""
+    total_customers: int
+    churned_count: int
+    stable_count: int
+    average_churn_probability: float
+    predictions: List[ChurnPredictionResponse]
+
+
+class FeatureImportanceItem(BaseModel):
+    """Feature importance ranking."""
+    rank: int
+    feature_name: str
+    importance_score: float
+    interpretation: str
+
+
+class FeatureImportanceResponse(BaseModel):
+    """Response for feature importance analysis."""
+    total_features: int
+    top_features: List[FeatureImportanceItem]
+    model_performance: Dict[str, float]
+
+
+class ModelTrainingResponse(BaseModel):
+    """Response for model training/retraining endpoint."""
+    success: bool
+    message: str
+    model_metrics: Dict[str, float]
+    training_timestamp: str
+    customers_trained: int
