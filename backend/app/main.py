@@ -494,7 +494,7 @@ def _get_recommended_action(churn_risk: float) -> str:
 
 @app.get("/api/personas", response_model=dict)
 async def list_personas():
-    """List all 10 Phase 4 personas with their metadata."""
+    """List all 22 Phase 4 personas with their metadata (10 core + 12 edge cases)."""
     from .ml.persona_registry import list_personas as get_personas
     return {"personas": get_personas()}
 

@@ -461,3 +461,503 @@ class BudgetSaver(PersonaGenerator):
     def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
         """Essential only."""
         return {'Groceries': 0.70, 'Utilities': 0.15, 'Transport': 0.10, 'Other': 0.05}
+
+
+class ExtremeSpender(PersonaGenerator):
+    """EXTREME_Spender: Wealthy customer with very high monthly spending (>$10k)."""
+
+    NAME = "EXTREME_Spender"
+    PERSONA_ID = 11
+    NARRATIVE = "High net worth individual with luxury spending habits"
+    EXPECTED_RISK_SCORE = 0.05
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Very high monthly budget with slight growth."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+        return 10000 + (50 * months_since_start)
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """Seasonal travel and holidays."""
+        seasonality_map = {1: 1.2, 2: 0.9, 3: 1.0, 4: 0.95, 5: 1.05, 6: 1.1,
+                          7: 1.25, 8: 1.2, 9: 1.0, 10: 0.95, 11: 1.15, 12: 1.3}
+        return seasonality_map.get(month.month, 1.0)
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Premium shopping and travel."""
+        return {'Shopping': 0.40, 'Travel': 0.30, 'Restaurants': 0.20, 'Entertainment': 0.10}
+
+    def _get_transaction_amount(self, monthly_budget: float) -> float:
+        """Higher amounts for premium customer."""
+        amount = self.rng.lognormal(mean=np.log(300), sigma=0.6)
+        return min(amount, monthly_budget * 0.3)
+
+
+class SubsistenceMinimal(PersonaGenerator):
+    """SUBSISTENCE_Minimal: Very low monthly spending (<$100) from dormant/minimal account."""
+
+    NAME = "SUBSISTENCE_Minimal"
+    PERSONA_ID = 12
+    NARRATIVE = "Minimal spending, likely student or unemployed, essential purchases only"
+    EXPECTED_RISK_SCORE = 0.45
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Very minimal budget."""
+        return self.rng.uniform(50, 150)
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No seasonality."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Only essentials."""
+        return {'Groceries': 0.80, 'Transport': 0.15, 'Utilities': 0.05}
+
+    def _get_transaction_count(self, month: datetime) -> int:
+        """Very few transactions."""
+        return self.rng.integers(3, 8)
+
+
+class DormantRevival(PersonaGenerator):
+    """DORMANT_Revival: Account inactive 8 months, then gradual reactivation."""
+
+    NAME = "DORMANT_Revival"
+    PERSONA_ID = 13
+    NARRATIVE = "Dormant account reactivated, customer returning after 8-month absence"
+    EXPECTED_RISK_SCORE = 0.55
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Zero for 8 months, then gradual ramp-up."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 8:
+            return 0  # Dormant period
+        else:
+            # Gradual ramp-up over 4 months (months 8-12), starting with small base
+            ramp_months = min(months_since_start - 8, 4)
+            # Start with minimum of $500 (month 8), ramp to $3000 (month 12)
+            return 500 + ((ramp_months / 4.0) * 2500)
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No seasonality."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Start with essentials, diversify as activity returns."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 8:
+            return {'Groceries': 0.9, 'Other': 0.1}  # Only essentials when reactivating
+        else:
+            # Gradually diversify
+            progress = min((months_since_start - 8) / 8.0, 1.0)
+            return {
+                'Groceries': 0.4 + (0.5 * (1 - progress)),
+                'Restaurants': 0.2 * progress,
+                'Transport': 0.2 * progress,
+                'Entertainment': 0.1 * progress,
+                'Other': 0.1,
+            }
+
+    def _get_transaction_count(self, month: datetime) -> int:
+        """Few txns initially, increasing."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+        if months_since_start < 8:
+            return 0  # Dormant
+        else:
+            ramp = min((months_since_start - 8) / 8.0, 1.0)
+            return int(ramp * 25 + 5)
+
+
+class DeclineRecovery(PersonaGenerator):
+    """DECLINE_Recovery: Sharp decline followed by V-shaped recovery."""
+
+    NAME = "DECLINE_Recovery"
+    PERSONA_ID = 14
+    NARRATIVE = "Temporary life crisis (month 7-12) followed by strong recovery"
+    EXPECTED_RISK_SCORE = 0.40
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """V-shaped pattern."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return 3500  # Normal
+        elif months_since_start < 12:
+            # Decline phase
+            decline_progress = (months_since_start - 6) / 6.0
+            return 3500 * (1 - 0.55 * decline_progress)  # Down to ~1575
+        else:
+            # Recovery phase
+            recovery_progress = min((months_since_start - 12) / 12.0, 1.0)
+            low_point = 1575
+            return low_point + (4200 - low_point) * recovery_progress  # Up to $4200
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """Light seasonality."""
+        seasonality_map = {1: 0.95, 2: 0.95, 3: 1.0, 4: 1.0, 5: 1.0, 6: 0.98,
+                          7: 0.98, 8: 0.98, 9: 1.0, 10: 1.0, 11: 1.05, 12: 1.1}
+        return seasonality_map.get(month.month, 1.0)
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Shift to essentials during crisis."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return {'Restaurants': 0.40, 'Shopping': 0.30, 'Entertainment': 0.20, 'Groceries': 0.10}
+        elif months_since_start < 12:
+            # Crisis: shift to essentials
+            return {'Groceries': 0.70, 'Transport': 0.15, 'Utilities': 0.15}
+        else:
+            # Recovery: gradual return to normal
+            recovery_progress = min((months_since_start - 12) / 12.0, 1.0)
+            crisis_factor = 1.0 - recovery_progress
+
+            # Ensure probabilities sum to 1.0
+            distribution = {
+                'Restaurants': 0.35 * recovery_progress,
+                'Shopping': 0.25 * recovery_progress,
+                'Entertainment': 0.15 * recovery_progress,
+                'Groceries': 0.15 + 0.55 * crisis_factor,
+                'Transport': 0.10 * crisis_factor,
+            }
+            total = sum(distribution.values())
+            return {k: v / total for k, v in distribution.items()}
+
+
+class BurstFraud(PersonaGenerator):
+    """BURST_Fraud: Suspicious rapid transaction clusters."""
+
+    NAME = "BURST_Fraud"
+    PERSONA_ID = 15
+    NARRATIVE = "Suspicious rapid transaction sequences, potential fraud pattern"
+    EXPECTED_RISK_SCORE = 0.85
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Normal baseline."""
+        return 3000
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No seasonality."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Various categories."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 12:
+            # Normal behavior first half
+            return {'Groceries': 0.30, 'Restaurants': 0.25, 'Shopping': 0.25, 'Entertainment': 0.20}
+        else:
+            # Fraud phase: casino/gambling (normalize probabilities)
+            return {'Gambling': 0.50, 'ATM': 0.30, 'Shopping': 0.15, 'Other': 0.05}
+
+    def _get_transaction_count(self, month: datetime) -> int:
+        """Normal until month 12, then burst clusters."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 12:
+            return self.rng.integers(20, 30)
+        else:
+            # Burst phase: 5-10 txns per cluster
+            return self.rng.integers(40, 60)
+
+    def _get_random_date_in_month(self, month: datetime) -> datetime:
+        """Create temporal clusters in fraud phase."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 12:
+            # Normal distribution
+            day = self.rng.integers(1, 29)
+        else:
+            # Clustered - same day clusters for fraud bursts
+            day = self.rng.integers(1, 29)
+
+        return month.replace(day=min(day, 28))
+
+    def _get_transaction_amount(self, monthly_budget: float) -> float:
+        """Larger amounts for fraud phase."""
+        amount = self.rng.lognormal(mean=np.log(50), sigma=0.5)
+        return min(amount, monthly_budget * 0.4)
+
+
+class VolatilityCyclic(PersonaGenerator):
+    """VOLATILITY_Cyclic: Extreme quarterly boom-bust cycles."""
+
+    NAME = "VOLATILITY_Cyclic"
+    PERSONA_ID = 16
+    NARRATIVE = "Seasonal business owner with extreme quarterly cycles"
+    EXPECTED_RISK_SCORE = 0.40
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Quarterly cycle."""
+        quarter = (month.month - 1) // 3
+
+        if quarter == 0:  # Q1: Boom
+            return 8000
+        elif quarter == 1:  # Q2: Decline
+            return 2000
+        elif quarter == 2:  # Q3: Recovery
+            return 6000
+        else:  # Q4: Peak
+            return 9000
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No additional seasonality, quarterly cycle is primary."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Shift based on cycle."""
+        quarter = (month.month - 1) // 3
+
+        if quarter in [0, 3]:  # Boom phases
+            return {'Shopping': 0.40, 'Restaurants': 0.30, 'Entertainment': 0.20, 'Travel': 0.10}
+        else:  # Decline phases
+            return {'Groceries': 0.50, 'Transport': 0.30, 'Utilities': 0.20}
+
+
+class CategorySwitcher(PersonaGenerator):
+    """CATEGORY_Switcher: Complete lifestyle change with category shift."""
+
+    NAME = "CATEGORY_Switcher"
+    PERSONA_ID = 17
+    NARRATIVE = "Major lifestyle change (job relocation, family status), MCC distribution completely shifts"
+    EXPECTED_RISK_SCORE = 0.50
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Stable amount, categories change."""
+        return 3000
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """Light seasonality."""
+        seasonality_map = {1: 0.95, 2: 0.95, 3: 1.0, 4: 1.0, 5: 1.0, 6: 0.98,
+                          7: 0.98, 8: 0.98, 9: 1.0, 10: 1.0, 11: 1.05, 12: 1.1}
+        return seasonality_map.get(month.month, 1.0)
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Major shift at month 7."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 7:
+            # Urban: restaurants heavy
+            return {'Restaurants': 0.50, 'Entertainment': 0.25, 'Transport': 0.15, 'Groceries': 0.10}
+        else:
+            # Rural/family: groceries heavy
+            return {'Groceries': 0.70, 'Utilities': 0.15, 'Kids': 0.10, 'Transport': 0.05}
+
+
+class PerfectRoutine(PersonaGenerator):
+    """PERFECT_Routine: Extremely deterministic spending with same amounts/times."""
+
+    NAME = "PERFECT_Routine"
+    PERSONA_ID = 18
+    NARRATIVE = "Extremely regular person with near-identical daily purchases"
+    EXPECTED_RISK_SCORE = 0.08
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Fixed budget."""
+        return 3000  # Exactly $3000/month
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No seasonality."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Fixed distribution."""
+        return {'Groceries': 0.35, 'Restaurants': 0.25, 'Transport': 0.20, 'Utilities': 0.20}
+
+    def _get_transaction_count(self, month: datetime) -> int:
+        """Exactly 22 transactions per month."""
+        return 22
+
+    def _get_random_date_in_month(self, month: datetime) -> datetime:
+        """Specific days: Mon-Fri for work, Wed for groceries, Fri for gas, last day for utilities."""
+        # Simplified: spread evenly across Mon-Fri
+        weekday = self.rng.integers(0, 5)  # Mon=0 to Fri=4
+        day = 1 + (self.rng.integers(0, 4) * 7) + weekday  # Spread across weeks
+        return month.replace(day=min(day, 28))
+
+    def _get_transaction_amount(self, monthly_budget: float) -> float:
+        """Very consistent amounts."""
+        # 5 merchants with fixed amounts
+        base_amounts = [4.50, 12.00, 80, 50, 150]
+        amount = self.rng.choice(base_amounts)
+        # Add tiny variance (±0.5)
+        return amount + self.rng.uniform(-0.5, 0.5)
+
+    def _get_time_of_day(self, month: datetime) -> str:
+        """Specific times."""
+        return self.rng.choice(['morning', 'afternoon', 'evening'], p=[0.3, 0.5, 0.2])
+
+
+class MultiCountry(PersonaGenerator):
+    """MULTI_Country: Frequent international traveler with multi-country transactions."""
+
+    NAME = "MULTI_Country"
+    PERSONA_ID = 19
+    NARRATIVE = "Frequent international traveler with transactions across multiple countries"
+    EXPECTED_RISK_SCORE = 0.25
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Normal budget."""
+        return 3500
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """Slight summer travel increase."""
+        seasonality_map = {1: 0.95, 2: 0.95, 3: 1.0, 4: 1.05, 5: 1.1, 6: 1.15,
+                          7: 1.25, 8: 1.2, 9: 1.05, 10: 1.0, 11: 0.95, 12: 1.0}
+        return seasonality_map.get(month.month, 1.0)
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Travel-heavy distribution."""
+        return {'Restaurants': 0.30, 'Travel': 0.30, 'Shopping': 0.20, 'Entertainment': 0.20}
+
+    def _get_country(self, month: datetime) -> str:
+        """Rotate through multiple countries."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+        countries = ['GB', 'US', 'FR', 'DE', 'ES']
+        # Shift countries monthly with 40% GB baseline
+        if self.rng.random() < 0.4:
+            return 'GB'
+        return self.rng.choice(countries)
+
+
+class MuleAccount(PersonaGenerator):
+    """MULE_Account: Money laundering simulation with rapid deposits/withdrawals."""
+
+    NAME = "MULE_Account"
+    PERSONA_ID = 20
+    NARRATIVE = "Suspicious money movement pattern, potential money mule account"
+    EXPECTED_RISK_SCORE = 0.90
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Cycles of large amounts."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return 500  # Minimal activity initially
+        else:
+            # Large cycles
+            return 5000
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No seasonality."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Wire transfers and ATM dominant."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return {'Groceries': 0.5, 'Transport': 0.5}
+        else:
+            return {'Other': 0.80, 'ATM': 0.20}  # Ambiguous categories for transfers
+
+    def _get_transaction_count(self, month: datetime) -> int:
+        """2-3 large clusters per month."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return self.rng.integers(5, 8)
+        else:
+            return self.rng.integers(8, 12)  # Few large txns
+
+    def _get_transaction_amount(self, monthly_budget: float) -> float:
+        """Very large, fixed amounts."""
+        months_since_start = (month := datetime(2024, 1, 1)).year  # Dummy
+
+        if months_since_start < 6:
+            return self.rng.uniform(50, 100)
+        else:
+            # Large fixed amounts ($4500-5000)
+            return self.rng.uniform(4500, 5000)
+
+
+class SplitterSmurfer(PersonaGenerator):
+    """SPLITTER_Smurfer: Transaction splitting to avoid detection."""
+
+    NAME = "SPLITTER_Smurfer"
+    PERSONA_ID = 21
+    NARRATIVE = "Breaking large transactions into smaller amounts, potential structuring"
+    EXPECTED_RISK_SCORE = 0.85
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Normal baseline that gets split."""
+        return 3000
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """No seasonality."""
+        return 1.0
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Shifting from normal to repetitive same-category."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return {'Groceries': 0.30, 'Shopping': 0.30, 'Restaurants': 0.25, 'Entertainment': 0.15}
+        else:
+            # Same merchant/category repeated
+            return {'Shopping': 0.95, 'Other': 0.05}
+
+    def _get_transaction_count(self, month: datetime) -> int:
+        """Normal until splitting starts."""
+        months_since_start = (month.year - self.start_date.year) * 12 + (month.month - self.start_date.month)
+
+        if months_since_start < 6:
+            return self.rng.integers(25, 30)
+        else:
+            # Many small transactions (splitting)
+            return self.rng.integers(80, 120)
+
+    def _get_transaction_amount(self, monthly_budget: float) -> float:
+        """Smaller amounts when splitting."""
+        months_since_start = (month := datetime(2024, 1, 1)).year  # Dummy
+
+        if months_since_start < 6:
+            amount = self.rng.lognormal(mean=np.log(100), sigma=0.5)
+        else:
+            # Consistently smaller: $500 split into 10 × $50 txns
+            amount = self.rng.uniform(400, 600)
+
+        return min(amount, monthly_budget * 0.3)
+
+
+class NighttimeOnly(PersonaGenerator):
+    """NIGHTTIME_Only: All transactions only at night (23:00-06:00)."""
+
+    NAME = "NIGHTTIME_Only"
+    PERSONA_ID = 22
+    NARRATIVE = "Extreme temporal skew, all transactions only at night, potential shift work or concerning"
+    EXPECTED_RISK_SCORE = 0.65
+
+    def _calculate_monthly_budget(self, month: datetime) -> float:
+        """Normal spending amount."""
+        return 2500
+
+    def _get_seasonality(self, month: datetime) -> float:
+        """Summer increase (more outdoor nightlife)."""
+        seasonality_map = {1: 0.95, 2: 0.95, 3: 1.0, 4: 1.05, 5: 1.1, 6: 1.15,
+                          7: 1.25, 8: 1.2, 9: 1.05, 10: 0.98, 11: 0.95, 12: 0.95}
+        return seasonality_map.get(month.month, 1.0)
+
+    def _get_mcc_distribution(self, month: datetime) -> Dict[str, float]:
+        """Night-oriented spending."""
+        return {'Restaurants': 0.30, 'Entertainment': 0.30, 'ATM': 0.25, 'Shopping': 0.15}
+
+    def _get_random_date_in_month(self, month: datetime) -> datetime:
+        """Nighttime only + concentrated on weekends."""
+        # Slightly bias towards Wed-Sat (nights out)
+        if self.rng.random() < 0.6:
+            # Weekend nights
+            weekday = self.rng.integers(2, 6)  # Wed-Sat
+        else:
+            # Any weekday
+            weekday = self.rng.integers(0, 7)
+
+        day = 1 + (self.rng.integers(0, 4) * 7) + weekday
+        day = min(day, 28)
+
+        return month.replace(day=day)
+
+    def _get_time_of_day(self, month: datetime) -> str:
+        """Always night."""
+        return self.rng.choice(['evening', 'night'], p=[0.3, 0.7])
