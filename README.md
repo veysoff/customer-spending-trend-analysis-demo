@@ -106,7 +106,7 @@ cd backend
 pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --port 8000
 # API at: http://localhost:8000/docs
-# Database auto-initializes with 10 personas
+# Database auto-initializes with 22 personas (~14,500 synthetic transactions)
 
 # Or: Full stack with Docker
 docker-compose up --build
