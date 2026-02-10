@@ -155,6 +155,87 @@ class SyntheticDataGenerator:
         df["date"] = pd.to_datetime(df["date"])
         return df.sort_values(["customer_id", "date"]).reset_index(drop=True)
 
+    def _generate_churn_metrics(self, churn_pattern: str) -> dict:
+        """Generate credit and churn-related metrics based on pattern.
+
+        Patterns:
+        - "stable": no churn, low dormancy (0-30 days), active customer
+        - "churning": churned, high dormancy (90-180 days), declining engagement
+        - "at_risk": no churn yet, medium dormancy (30-60 days), warning signs
+        - "churned": churned, very high dormancy (180+ days), inactive for long time
+        """
+        if churn_pattern == "stable":
+            return {
+                "credit_limit": self.rng.uniform(8000, 25000),
+                "current_balance": self.rng.uniform(1000, 5000),
+                "annual_income": self.rng.uniform(30000, 120000),
+                "is_churned": 0,
+                "support_tickets_count": int(self.rng.poisson(1)),
+                "complaint_severity": "LOW",
+                "campaigns_opened": int(self.rng.integers(3, 10)),
+                "campaigns_clicked": int(self.rng.integers(1, 5)),
+                "max_payment_delay_days": int(self.rng.integers(0, 5)),
+                "total_late_payments": 0,
+            }
+        elif churn_pattern == "churning":
+            return {
+                "credit_limit": self.rng.uniform(5000, 15000),
+                "current_balance": self.rng.uniform(8000, 15000),
+                "annual_income": self.rng.uniform(25000, 80000),
+                "is_churned": 1,
+                "support_tickets_count": int(self.rng.poisson(5)),
+                "complaint_severity": "HIGH",
+                "campaigns_opened": int(self.rng.integers(0, 3)),
+                "campaigns_clicked": int(self.rng.integers(0, 1)),
+                "max_payment_delay_days": int(self.rng.integers(10, 30)),
+                "total_late_payments": int(self.rng.integers(1, 5)),
+            }
+        elif churn_pattern == "at_risk":
+            return {
+                "credit_limit": self.rng.uniform(10000, 30000),
+                "current_balance": self.rng.uniform(2000, 8000),
+                "annual_income": self.rng.uniform(40000, 150000),
+                "is_churned": 0,
+                "support_tickets_count": int(self.rng.poisson(3)),
+                "complaint_severity": "MEDIUM",
+                "campaigns_opened": int(self.rng.integers(2, 7)),
+                "campaigns_clicked": int(self.rng.integers(0, 3)),
+                "max_payment_delay_days": int(self.rng.integers(5, 15)),
+                "total_late_payments": 0,
+            }
+        else:  # churned
+            return {
+                "credit_limit": self.rng.uniform(3000, 10000),
+                "current_balance": self.rng.uniform(5000, 9000),
+                "annual_income": self.rng.uniform(20000, 60000),
+                "is_churned": 1,
+                "support_tickets_count": int(self.rng.poisson(2)),
+                "complaint_severity": "MEDIUM",
+                "campaigns_opened": int(self.rng.integers(0, 2)),
+                "campaigns_clicked": 0,
+                "max_payment_delay_days": 0,
+                "total_late_payments": 0,
+            }
+
+    def _get_churn_pattern(self, customer_idx: int) -> str:
+        """Assign churn pattern to customer based on distribution.
+
+        Distribution:
+        - 40% stable (no churn)
+        - 30% churning (churned)
+        - 20% at_risk (no churn but at risk)
+        - 10% churned (long-term inactive)
+        """
+        ratio = customer_idx / self.n_customers
+        if ratio < 0.40:
+            return "stable"
+        elif ratio < 0.70:
+            return "churning"
+        elif ratio < 0.90:
+            return "at_risk"
+        else:
+            return "churned"
+
     def save_to_db(self, db_session, batch_size: int = 1000):
         """Save generated data to database in batches.
 
@@ -166,21 +247,38 @@ class SyntheticDataGenerator:
         """
         from sqlalchemy.orm import Session
         from ..db.models import Customer, Transaction
+        from datetime import datetime, timezone
 
         # Generate data
         df = self.generate()
 
-        # Extract unique customers and insert
+        # Extract unique customers and insert with churn metrics
         customers_df = df[["customer_id", "pattern"]].drop_duplicates()
         customers_to_insert = []
 
-        for _, row in customers_df.iterrows():
+        for idx, (_, row) in enumerate(customers_df.iterrows()):
             customer_transactions = df[df["customer_id"] == row["customer_id"]]
+
+            # Get churn pattern and metrics
+            churn_pattern = self._get_churn_pattern(idx)
+            churn_metrics = self._generate_churn_metrics(churn_pattern)
+
             customer = Customer(
                 id=row["customer_id"],
                 pattern=row["pattern"],
                 first_transaction_date=customer_transactions["date"].min(),
                 last_transaction_date=customer_transactions["date"].max(),
+                # Add churn-related fields
+                credit_limit=churn_metrics["credit_limit"],
+                current_balance=churn_metrics["current_balance"],
+                annual_income=churn_metrics["annual_income"],
+                is_churned=churn_metrics["is_churned"],
+                support_tickets_count=churn_metrics["support_tickets_count"],
+                complaint_severity=churn_metrics["complaint_severity"],
+                campaigns_opened=churn_metrics["campaigns_opened"],
+                campaigns_clicked=churn_metrics["campaigns_clicked"],
+                max_payment_delay_days=churn_metrics["max_payment_delay_days"],
+                total_late_payments=churn_metrics["total_late_payments"],
             )
             customers_to_insert.append(customer)
 

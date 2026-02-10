@@ -29,6 +29,31 @@ class Customer(Base):
     expected_risk_score = Column(Float, nullable=True)
     generation_timestamp = Column(DateTime, nullable=True)
 
+    # Credit/Account Management (UC-2 Phase 5)
+    credit_limit = Column(Float, nullable=True, default=5000.0)
+    current_balance = Column(Float, nullable=True, default=0.0)
+    annual_income = Column(Float, nullable=True)
+
+    # Churn Training Label
+    is_churned = Column(Integer, nullable=True, default=0)  # 0/1 binary label
+
+    # Support/Customer Service
+    support_tickets_count = Column(Integer, nullable=True, default=0)
+    complaint_severity = Column(String(20), nullable=True)  # LOW, MEDIUM, HIGH
+
+    # Marketing Engagement
+    campaigns_opened = Column(Integer, nullable=True, default=0)
+    campaigns_clicked = Column(Integer, nullable=True, default=0)
+
+    # Payment Behavior
+    max_payment_delay_days = Column(Integer, nullable=True, default=0)
+    total_late_payments = Column(Integer, nullable=True, default=0)
+
+    # Computed Fields
+    days_since_last_transaction = Column(Integer, nullable=True)
+    churn_risk_score = Column(Float, nullable=True)
+    churn_prediction_timestamp = Column(DateTime(timezone=True), nullable=True)
+
     # Relationship for eager loading
     transactions = relationship("Transaction", back_populates="customer", lazy="dynamic")
 
