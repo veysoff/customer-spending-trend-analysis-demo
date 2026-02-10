@@ -38,7 +38,7 @@
               </span>
             </div>
             <div class="w-full bg-gray-200 rounded-full h-2">
-              <div class="h-2 rounded-full bg-green-500" :style="{ width: (profile.total_transactions / 400) * 100 + '%' }"></div>
+              <div class="h-2 rounded-full bg-green-500" :style="{ width: Math.min((profile.total_transactions / 400) * 100, 100) + '%' }"></div>
             </div>
           </div>
 

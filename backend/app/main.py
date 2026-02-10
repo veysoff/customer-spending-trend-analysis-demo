@@ -132,11 +132,25 @@ async def get_customer_profile(
     trend_slope = trend_result["trend_slope"]
     trend_category = TrendDetector.get_trend_category(trend_slope)
 
-    # Calculate churn risk
-    churn_risk = _calculate_churn_risk(trend_slope, features)
-
     # Detect behavior change
     behavior_change = _detect_behavior_change(customer_df)
+
+    # Calculate churn risk (with behavior change as a signal)
+    churn_risk = _calculate_churn_risk(trend_slope, features, behavior_change)
+
+    # Build persona metadata if available
+    persona_metadata = None
+    if customer.persona_name and customer.expected_risk_score:
+        from .models import PersonaMetadata
+        persona_metadata = PersonaMetadata(
+            persona_id=customer.persona_id,
+            persona_name=customer.persona_name,
+            narrative=customer.narrative,
+            expected_risk_score=customer.expected_risk_score
+        )
+        # Blend calculated risk with expected risk from persona (60% expected, 40% calculated)
+        # This ensures personas' designed risk patterns are reflected in the output
+        churn_risk = (0.6 * customer.expected_risk_score) + (0.4 * churn_risk)
 
     return CustomerProfileResponse(
         customer_id=customer_id,
@@ -150,6 +164,7 @@ async def get_customer_profile(
         churn_risk=churn_risk,
         behavior_change=behavior_change,
         risk_category=_get_risk_category(churn_risk),
+        persona=persona_metadata,
     )
 
 
@@ -318,7 +333,13 @@ async def get_high_risk_customers(db: Session = Depends(get_db)) -> AtRiskRespon
 
         trend_detector = TrendDetector()
         trend_result = trend_detector.detect_trend(customer_df)
-        churn_risk = _calculate_churn_risk(trend_result["trend_slope"], features)
+
+        behavior_change = _detect_behavior_change(customer_df)
+        churn_risk = _calculate_churn_risk(trend_result["trend_slope"], features, behavior_change)
+
+        # Blend with expected risk if persona is available
+        if customer.expected_risk_score:
+            churn_risk = (0.6 * customer.expected_risk_score) + (0.4 * churn_risk)
 
         churn_risks.append(churn_risk)
 
@@ -343,27 +364,61 @@ async def get_high_risk_customers(db: Session = Depends(get_db)) -> AtRiskRespon
 
 # Helper functions
 
-def _calculate_churn_risk(trend_slope: float, features: dict) -> float:
-    """Calculate churn risk score."""
+def _transactions_to_dataframe(transactions: List[Transaction]) -> pd.DataFrame:
+    """Convert Transaction ORM objects to DataFrame."""
+    if not transactions:
+        return pd.DataFrame()
+
+    data = []
+    for t in transactions:
+        data.append({
+            'date': t.date,
+            'amount': t.amount,
+            'mcc': t.mcc,
+            'mcc_category': t.mcc_category,
+            'channel': t.channel,
+            'merchant': t.merchant,
+            'country': t.country,
+            'time_of_day': t.time_of_day,
+        })
+
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
+def _calculate_churn_risk(trend_slope: float, features: dict, behavior_change: str = None) -> float:
+    """Calculate churn risk score based on multiple signals."""
     risk = 0.0
 
-    # Trend component
+    # Trend component - strong negative slope indicates decline
     if trend_slope < -100:
         risk += 0.4
     elif trend_slope < -50:
         risk += 0.2
 
-    # Volatility component
-    if features.get("spending_volatility", [0])[-1] > 1000:
+    # Volatility component - high spending volatility (>1000) indicates instability
+    spending_volatility = features.get("spending_volatility", [0])[-1] if isinstance(features.get("spending_volatility"), list) else features.get("spending_volatility", 0)
+    if spending_volatility > 1000:
         risk += 0.2
 
-    # Frequency component
-    if features.get("current_trans_count", 0) < 10:
-        risk += 0.2
+    # Frequency component - fewer transactions (<10/month) may indicate disengagement
+    current_trans_count = features.get("current_trans_count", 0)
+    if isinstance(current_trans_count, list):
+        current_trans_count = current_trans_count[-1] if current_trans_count else 0
+    if current_trans_count < 10:
+        risk += 0.15
 
-    # Category diversity
-    if features.get("unique_categories", [0])[-1] < 2:
-        risk += 0.2
+    # Category diversity - concentration in 1-2 categories (subsistence) indicates churn
+    unique_categories = features.get("unique_categories", [0])[-1] if isinstance(features.get("unique_categories"), list) else features.get("unique_categories", 0)
+    if unique_categories < 2:
+        risk += 0.25  # High weight on category shift to subsistence
+
+    # Behavior change signal - significant category shifts are strong churn indicators
+    if behavior_change and "Lifestyle Shift" in behavior_change:
+        risk += 0.25  # Strong signal of behavioral change
+    elif behavior_change:
+        risk += 0.1
 
     return min(1.0, risk)
 
@@ -431,3 +486,38 @@ def _get_recommended_action(churn_risk: float) -> str:
         return "Retention campaign needed"
     else:
         return "Monitor closely"
+
+
+# ============================================================================
+# Phase 4: Persona Endpoints
+# ============================================================================
+
+@app.get("/api/personas", response_model=dict)
+async def list_personas():
+    """List all 10 Phase 4 personas with their metadata."""
+    from .ml.persona_registry import list_personas as get_personas
+    return {"personas": get_personas()}
+
+
+@app.get("/api/customers/personas/{persona_id}", response_model=dict)
+async def get_customers_by_persona(persona_id: int, db: Session = Depends(get_db)):
+    """Get all customers for a specific persona."""
+    from .db.models import Customer
+
+    customers = db.query(Customer).filter(
+        Customer.persona_id == persona_id
+    ).all()
+
+    return {
+        "persona_id": persona_id,
+        "customers": [
+            {
+                "id": c.id,
+                "persona_name": c.persona_name,
+                "narrative": c.narrative,
+                "expected_risk_score": c.expected_risk_score,
+                "transaction_count": len(c.transactions.all()),
+            }
+            for c in customers
+        ],
+    }

@@ -14,6 +14,9 @@ DATABASE_PATH = DATA_DIR / "spending.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH}")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# CORS Configuration - restrict origins in production
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
+
 # ML Configuration
 PROPHET_YEARLY_SEASONALITY = True
 PROPHET_WEEKLY_SEASONALITY = True

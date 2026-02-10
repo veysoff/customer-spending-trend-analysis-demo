@@ -118,7 +118,18 @@ async function initializeData() {
   }
 }
 
-onMounted(() => {
-  // Auto-load high-risk customers after data is generated
+onMounted(async () => {
+  // Auto-load personas from database
+  try {
+    await store.loadCustomers()
+    await store.loadHighRiskCustomers()
+    highRiskLoaded.value = true
+    // Select first customer by default
+    if (store.customers.length > 0) {
+      await store.selectCustomer(store.customers[0].customer_id)
+    }
+  } catch (err) {
+    console.error('Failed to load personas:', err)
+  }
 })
 </script>

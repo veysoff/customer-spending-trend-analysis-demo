@@ -44,6 +44,12 @@ export const apiService = {
     return response.data
   },
 
+  // Get personas
+  async getPersonas() {
+    const response = await api.get('/api/personas')
+    return response.data
+  },
+
   // Health check
   async healthCheck() {
     const response = await api.get('/health')

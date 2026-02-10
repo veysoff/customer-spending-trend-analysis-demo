@@ -2,6 +2,14 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 
 
+class PersonaMetadata(BaseModel):
+    """Persona metadata for a customer."""
+    persona_id: Optional[int] = None
+    persona_name: Optional[str] = None
+    narrative: Optional[str] = None
+    expected_risk_score: Optional[float] = None
+
+
 class TransactionResponse(BaseModel):
     transaction_id: str
     customer_id: str
@@ -59,6 +67,7 @@ class CustomerProfileResponse(BaseModel):
     churn_risk: float
     behavior_change: Optional[str]
     risk_category: str
+    persona: Optional[PersonaMetadata] = None
 
 
 class AtRiskCustomer(BaseModel):

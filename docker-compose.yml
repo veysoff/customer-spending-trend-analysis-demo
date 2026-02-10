@@ -10,16 +10,18 @@ services:
     environment:
       - DATABASE_URL=sqlite:///./data/spending.db
       - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
     volumes:
       - ./backend/data:/app/data
     networks:
       - ml-poc-network
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --access-log
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # Frontend Application
   frontend:

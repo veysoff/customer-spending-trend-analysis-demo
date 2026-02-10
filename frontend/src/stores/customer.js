@@ -83,6 +83,29 @@ export const useCustomerStore = defineStore('customer', () => {
     }
   }
 
+  async function loadCustomers() {
+    loading.value = true
+    error.value = null
+    try {
+      const data = await apiService.getPersonas()
+      customers.value = data.personas.map((persona, index) => ({
+        customer_id: `${1000 + persona.id}`,
+        name: persona.name,
+        persona: persona.name,
+        narrative: persona.narrative,
+        expected_risk: persona.expected_risk_score,
+        status: 'active'
+      }))
+      dataGenerated.value = true
+      return data
+    } catch (err) {
+      error.value = err.message
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function loadHighRiskCustomers() {
     loading.value = true
     error.value = null
@@ -118,6 +141,7 @@ export const useCustomerStore = defineStore('customer', () => {
     generateData,
     selectCustomer,
     loadCustomerData,
+    loadCustomers,
     loadHighRiskCustomers
   }
 })

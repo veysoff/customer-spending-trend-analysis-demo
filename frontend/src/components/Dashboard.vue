@@ -4,6 +4,15 @@
       <h2 class="text-lg font-semibold text-gray-900">Customer Profile</h2>
     </div>
     <div class="card-body">
+      <!-- Persona Info (if available) -->
+      <div v-if="profile.persona" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <h3 class="font-semibold text-blue-900">Persona: {{ profile.persona.persona_name }}</h3>
+        <p class="text-blue-800 mt-2">{{ profile.persona.narrative }}</p>
+        <div class="mt-2 text-sm text-blue-700">
+          Expected Risk Score: {{ (profile.persona.expected_risk_score * 100).toFixed(0) }}%
+        </div>
+      </div>
+
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <!-- Left Column -->
         <div>

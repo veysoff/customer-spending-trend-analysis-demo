@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for banking data."""
 
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Index
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Index, Integer
 from sqlalchemy.orm import DeclarativeBase, relationship
 from datetime import datetime, timezone
 
@@ -11,7 +11,7 @@ class Base(DeclarativeBase):
 
 
 class Customer(Base):
-    """Customer profile with behavioral pattern."""
+    """Customer profile with behavioral pattern and persona metadata."""
 
     __tablename__ = "customers"
 
@@ -21,16 +21,27 @@ class Customer(Base):
     last_transaction_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # Persona metadata (nullable for backward compatibility)
+    persona_id = Column(Integer, nullable=True)
+    persona_name = Column(String(50), nullable=True)
+    persona_seed = Column(Integer, nullable=True)
+    narrative = Column(String(1000), nullable=True)
+    expected_risk_score = Column(Float, nullable=True)
+    generation_timestamp = Column(DateTime, nullable=True)
+
     # Relationship for eager loading
     transactions = relationship("Transaction", back_populates="customer", lazy="dynamic")
 
     # Indexes
     __table_args__ = (
         Index("idx_customer_pattern", "pattern"),
+        Index("idx_customer_persona_id", "persona_id"),
+        Index("idx_customer_persona_name", "persona_name"),
     )
 
     def __repr__(self):
-        return f"<Customer(id={self.id}, pattern={self.pattern})>"
+        persona_info = f", persona={self.persona_name}" if self.persona_name else ""
+        return f"<Customer(id={self.id}, pattern={self.pattern}{persona_info})>"
 
 
 class Transaction(Base):

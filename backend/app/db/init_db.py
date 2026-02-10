@@ -1,37 +1,36 @@
 """Database initialization with idempotent data generation."""
 
 import logging
+from datetime import datetime
 from sqlalchemy.orm import Session
 from .database import SessionLocal, create_tables
 from .models import Customer, Transaction
-from ..ml.data_generator import SyntheticDataGenerator
+from ..ml.persona_registry import PERSONA_REGISTRY
 
 logger = logging.getLogger(__name__)
 
 
 def initialize_database():
-    """Create tables and seed data if empty (idempotent).
+    """Create tables and seed personas if empty (idempotent).
 
-    This function is safe to call multiple times:
-    - First run: Creates tables, generates 1000 customers + 335k transactions
-    - Subsequent runs: Checks if data exists, skips generation
+    Safe to call multiple times - checks if data exists before generating.
     """
     # Create all tables
     logger.info("Creating database tables...")
     create_tables()
     logger.info("Database tables created")
 
-    # Check if data already exists
+    # Check if personas already exist
     db = SessionLocal()
     try:
-        customer_count = db.query(Customer).count()
+        persona_count = db.query(Customer).filter(Customer.persona_id != None).count()
 
-        if customer_count == 0:
-            logger.info("Database empty. Generating synthetic data...")
-            _generate_synthetic_data(db)
-            logger.info("Data generation complete")
+        if persona_count == 0:
+            logger.info("No personas found. Generating personas...")
+            _generate_personas(db)
+            logger.info("Persona generation complete")
         else:
-            logger.info(f"Database has {customer_count} customers. Skipping generation.")
+            logger.info(f"Database has {persona_count} personas. Skipping generation.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -39,74 +38,49 @@ def initialize_database():
         db.close()
 
 
-def _generate_synthetic_data(db: Session):
-    """Generate and insert synthetic banking data into database.
+def _generate_personas(db: Session):
+    """Generate customer personas with transactions into database."""
+    start_date = datetime(2024, 1, 1)
+    end_date = datetime(2025, 12, 31)
 
-    Args:
-        db: SQLAlchemy session for database operations
+    logger.info(f"Generating {len(PERSONA_REGISTRY)} personas...")
 
-    Process:
-    1. Generate 1000 customers + ~336k transactions using SyntheticDataGenerator
-    2. Extract unique customers and insert
-    3. Batch insert transactions (1000 per batch) to avoid memory overflow
-    """
-    logger.info("Initializing SyntheticDataGenerator...")
-    generator = SyntheticDataGenerator(n_customers=1000, n_months=12)
+    total_transactions = 0
 
-    logger.info("Generating synthetic data...")
-    df = generator.generate()
-    logger.info(f"Generated {len(df)} transactions for {df['customer_id'].nunique()} customers")
+    for persona_id, PersonaClass in PERSONA_REGISTRY.items():
+        customer_id = 1000 + persona_id  # IDs 1001-1010
+        customer_id_str = str(customer_id)
 
-    # Step 1: Extract and insert unique customers
-    logger.info("Inserting customers...")
-    customers_df = df[["customer_id", "pattern"]].drop_duplicates()
+        logger.info(f"Generating {PersonaClass.NAME} (ID: {customer_id})...")
 
-    customers = []
-    for _, row in customers_df.iterrows():
-        customer_transactions = df[df["customer_id"] == row["customer_id"]]
+        generator = PersonaClass(customer_id, start_date, end_date)
+        transactions = generator.generate_transactions()
+        total_transactions += len(transactions)
         customer = Customer(
-            id=row["customer_id"],
-            pattern=row["pattern"],
-            first_transaction_date=customer_transactions["date"].min(),
-            last_transaction_date=customer_transactions["date"].max(),
+            id=customer_id_str,
+            pattern=f"persona_{persona_id}",
+            persona_id=persona_id,
+            persona_name=PersonaClass.NAME,
+            persona_seed=customer_id,
+            narrative=PersonaClass.NARRATIVE,
+            expected_risk_score=PersonaClass.EXPECTED_RISK_SCORE,
+            generation_timestamp=datetime.utcnow(),
+            first_transaction_date=min(t['date'] for t in transactions) if transactions else None,
+            last_transaction_date=max(t['date'] for t in transactions) if transactions else None,
+            created_at=datetime.utcnow(),
         )
-        customers.append(customer)
 
-    db.bulk_save_objects(customers)
-    db.commit()
-    logger.info(f"Inserted {len(customers)} customers")
+        db.add(customer)
+        db.flush()
+        logger.info(f"  Inserting {len(transactions)} transactions...")
+        batch_size = 1000
 
-    # Step 2: Batch insert transactions
-    logger.info("Inserting transactions (batched)...")
-    batch_size = 1000
-    transactions_batch = []
-
-    for idx, (_, row) in enumerate(df.iterrows()):
-        transaction_dict = {
-            "id": row["transaction_id"],
-            "customer_id": row["customer_id"],
-            "date": row["date"],
-            "amount": row["amount"],
-            "mcc": row["mcc"],
-            "mcc_category": row["mcc_category"],
-            "channel": row["channel"],
-            "merchant": row["merchant"],
-            "country": row["country"],
-            "time_of_day": row["time_of_day"],
-        }
-        transactions_batch.append(transaction_dict)
-
-        # Bulk insert every N records
-        if len(transactions_batch) >= batch_size:
-            db.bulk_insert_mappings(Transaction, transactions_batch)
+        for i in range(0, len(transactions), batch_size):
+            batch = transactions[i:i+batch_size]
+            db.bulk_insert_mappings(Transaction, batch)
             db.commit()
-            logger.debug(f"Inserted {idx + 1} transactions...")
-            transactions_batch = []
+            logger.debug(f"    Batch {i//batch_size + 1}: {len(batch)} transactions inserted")
 
-    # Insert remaining transactions
-    if transactions_batch:
-        db.bulk_insert_mappings(Transaction, transactions_batch)
-        db.commit()
-        logger.debug(f"Inserted final batch of {len(transactions_batch)} transactions")
+        logger.info(f"{PersonaClass.NAME}: {len(transactions)} transactions")
 
-    logger.info(f"All {len(df)} transactions inserted successfully")
+    logger.info(f"Generated {total_transactions} transactions")
