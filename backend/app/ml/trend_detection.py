@@ -9,14 +9,19 @@ class TrendDetector:
     """Detect spending trends using Prophet."""
 
     def __init__(self, yearly_seasonality=True, weekly_seasonality=True,
-                 interval_width=0.80, growth="linear"):
+                 interval_width=0.95, growth="linear"):
         self.yearly_seasonality = yearly_seasonality
         self.weekly_seasonality = weekly_seasonality
-        self.interval_width = interval_width
+        self.interval_width = interval_width  # Wider confidence interval (95% vs 80%)
         self.growth = growth
 
-    def detect_trend(self, customer_df: pd.DataFrame, periods_ahead: int = 3) -> dict:
-        """Fit Prophet model and return forecast."""
+    def detect_trend(self, customer_df: pd.DataFrame, periods_ahead: int = 90) -> dict:
+        """Fit Prophet model and return forecast.
+
+        Args:
+            customer_df: DataFrame with transaction data
+            periods_ahead: Number of days to forecast (default: 90 days = ~3 months)
+        """
         if len(customer_df) < 7:
             return self._empty_forecast()
 
@@ -34,21 +39,38 @@ class TrendDetector:
                 daily_seasonality=False,
                 interval_width=self.interval_width,
                 growth=self.growth,
-                changepoint_prior_scale=0.05
+                seasonality_mode="additive",  # Better for spending patterns
+                seasonality_prior_scale=10.0,  # Strengthen seasonality
+                changepoint_prior_scale=0.001  # Reduce sensitivity to noise (was 0.05)
             )
-            model.fit(daily_spending)
+            model.fit(daily_spending, verbose=False)
 
             # Forecast ahead
             future = model.make_future_dataframe(periods=periods_ahead)
             forecast = model.predict(future)
 
-            # Extract trend component
-            trend_component = forecast["trend"].values
-            trend_slope = np.polyfit(np.arange(len(trend_component)), trend_component, 1)[0]
+            # Extract trend slope from FUTURE portion only (not historical)
+            historical_len = len(daily_spending)
+            future_trend = forecast.iloc[historical_len:]["trend"].values
+
+            if len(future_trend) > 1:
+                # Calculate slope per day for the future period
+                future_dates = np.arange(len(future_trend))
+                trend_slope = np.polyfit(future_dates, future_trend, 1)[0]
+            else:
+                trend_slope = 0.0
+
+            # Calculate actual seasonality amplitude from forecast
+            seasonality_component = forecast["seasonal"].values
+            if len(seasonality_component) > 0 and forecast["yhat"].mean() > 0:
+                seasonality_amplitude = (seasonality_component.max() - seasonality_component.min()) / forecast["yhat"].mean()
+            else:
+                seasonality_amplitude = 0.15
 
             return {
                 "forecast_data": self._format_forecast(daily_spending, forecast),
                 "trend_slope": float(trend_slope),
+                "seasonality_amplitude": float(seasonality_amplitude),
                 "has_seasonality": True,
                 "model": model
             }

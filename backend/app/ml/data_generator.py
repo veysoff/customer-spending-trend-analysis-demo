@@ -31,6 +31,21 @@ class SyntheticDataGenerator:
         self.seed = seed
         # Use a local random generator to avoid affecting global numpy state
         self.rng = np.random.default_rng(seed)
+        # Calculate start date: n_months ago from today
+        today = datetime.now()
+        # Calculate start date by going back n_months from today
+        if n_months <= 12:
+            start_year = today.year
+            start_month = today.month - n_months
+            if start_month < 1:
+                start_year -= 1
+                start_month += 12
+        else:
+            years_back = (n_months - 1) // 12
+            months_remaining = n_months % 12
+            start_year = today.year - years_back - 1
+            start_month = 12 - months_remaining
+        self.start_date = datetime(start_year, start_month, 1)
 
     def _get_pattern_type(self, customer_idx: int) -> str:
         """Assign behavior pattern to customer."""
@@ -133,7 +148,13 @@ class SyntheticDataGenerator:
                         if np.random.random() < 0.4:  # 40% category shift
                             mcc = "5411"  # Force GROCERY
 
-                    date_obj = datetime(2023, month, day, hour, minute)
+                    # Calculate date relative to start_date
+                    year = self.start_date.year
+                    month_num = self.start_date.month + month - 1
+                    if month_num > 12:
+                        year += (month_num - 1) // 12
+                        month_num = ((month_num - 1) % 12) + 1
+                    date_obj = datetime(year, month_num, day, hour, minute)
 
                     records.append({
                         "transaction_id": str(uuid.uuid4()),

@@ -274,7 +274,7 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
         ],
         trend_slope=trend_result["trend_slope"],
         seasonality_pattern="yearly_and_weekly",
-        seasonality_amplitude=0.15
+        seasonality_amplitude=trend_result.get("seasonality_amplitude", 0.15)  # Use computed value
     )
 
 
