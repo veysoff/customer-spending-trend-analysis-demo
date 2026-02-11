@@ -38,18 +38,32 @@ export const useCustomerStore = defineStore('customer', () => {
 
   // Actions
   async function selectCustomer(customerId) {
+    // IMPORTANT: Update selectedCustomerId FIRST to prevent race conditions
+    if (selectedCustomerId.value === customerId) {
+      // Already selected, don't reload
+      return
+    }
     selectedCustomerId.value = customerId
     await loadCustomerData(customerId)
   }
 
   async function loadCustomerData(customerId) {
+    // SAFETY: Verify this is still the selected customer (prevent stale updates)
+    if (selectedCustomerId.value !== customerId) {
+      console.log(`[Cache] Ignoring stale load request for ${customerId}`)
+      return
+    }
+
     // Return cached data if available
     if (dataCache.has(customerId)) {
       const cached = dataCache.get(customerId)
-      customerProfile.value = cached.profile
-      customerTrends.value = cached.trends
-      customerAnomalies.value = cached.anomalies
-      console.log(`[Cache] Loaded ${customerId} from cache (avoiding redundant API calls)`)
+      // SAFETY: Verify selection hasn't changed during cache retrieval
+      if (selectedCustomerId.value === customerId) {
+        customerProfile.value = cached.profile
+        customerTrends.value = cached.trends
+        customerAnomalies.value = cached.anomalies
+        console.log(`[Cache] Loaded ${customerId} from cache (avoiding redundant API calls)`)
+      }
       return
     }
 
@@ -68,6 +82,12 @@ export const useCustomerStore = defineStore('customer', () => {
         apiService.getCustomerAnomalies(customerId)
       ])
 
+      // SAFETY: Double-check selection hasn't changed during API call
+      if (selectedCustomerId.value !== customerId) {
+        console.log(`[Cache] API completed for ${customerId}, but user selected ${selectedCustomerId.value}. Discarding old data.`)
+        return
+      }
+
       customerProfile.value = profile
       customerTrends.value = trends
       customerAnomalies.value = anomalies
@@ -76,10 +96,16 @@ export const useCustomerStore = defineStore('customer', () => {
       dataCache.set(customerId, { profile, trends, anomalies })
       console.log(`[Cache] Stored ${customerId} in cache for future selections`)
     } catch (err) {
-      error.value = err.message
+      // SAFETY: Only set error if this is still the selected customer
+      if (selectedCustomerId.value === customerId) {
+        error.value = err.message
+      }
       throw err
     } finally {
-      loading.value = false
+      // SAFETY: Only hide loading if this is still the selected customer
+      if (selectedCustomerId.value === customerId) {
+        loading.value = false
+      }
     }
   }
 

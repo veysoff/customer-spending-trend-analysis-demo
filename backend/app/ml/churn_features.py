@@ -90,15 +90,12 @@ class ChurnFeatureEngineer:
         if not customer.last_transaction_date:
             return 365  # No transactions = very dormant
 
-        # Handle timezone-aware/naive datetime comparison
         last_transaction = customer.last_transaction_date
-        now = datetime.utcnow()
+        now = datetime.now()  # naive local time — consistent with DB storage
 
-        # Remove timezone info if present for consistent comparison
-        if last_transaction.tzinfo is not None:
+        # Strip timezone info if present (defensive)
+        if hasattr(last_transaction, 'tzinfo') and last_transaction.tzinfo is not None:
             last_transaction = last_transaction.replace(tzinfo=None)
-        if now.tzinfo is not None:
-            now = now.replace(tzinfo=None)
 
         days_since = (now - last_transaction).days
         return float(max(0, days_since))
@@ -179,9 +176,12 @@ class ChurnFeatureEngineer:
         if not customer.created_at:
             return 0.0
 
-        age_days = (datetime.utcnow().replace(tzinfo=None) - customer.created_at.replace(tzinfo=None)).days
+        created = customer.created_at.replace(tzinfo=None) if customer.created_at.tzinfo else customer.created_at
+        age_days = (datetime.now() - created).days
+        if age_days < 0:
+            age_days = 0  # created_at in future → treat as new account
         age_months = age_days / 30.44
-        return max(0.0, age_months)
+        return float(age_months)
 
     @staticmethod
     def calculate_balance_to_spending_ratio(customer: Customer, db: Session) -> float:
@@ -205,7 +205,8 @@ class ChurnFeatureEngineer:
         ).scalar()
 
         if not recent_transactions or recent_transactions == 0:
-            return 0.0
+            # No spending in 6 months = high churn signal → return max ratio
+            return 10.0
 
         # Calculate exact number of days and convert to months (more accurate)
         days_elapsed = (now - six_months_ago).days
@@ -235,9 +236,12 @@ class ChurnFeatureEngineer:
 
         inactive_months = 0
 
+        now = datetime.now()
         for months_back in range(6):
-            month_start = datetime.utcnow() - timedelta(days=30 * (months_back + 1))
-            month_end = datetime.utcnow() - timedelta(days=30 * months_back)
+            # months_back=0 → current month (now-30d to now)
+            # months_back=1 → previous month (now-60d to now-30d), etc.
+            month_end = now - timedelta(days=30 * months_back)
+            month_start = now - timedelta(days=30 * (months_back + 1))
 
             transactions_in_month = (
                 db.query(func.count(Transaction.id))
@@ -397,7 +401,8 @@ class ChurnFeatureEngineer:
         y = np.array(counts)
 
         trend = np.polyfit(x, y, 1)[0]
-        return float(trend)
+        result = float(trend)
+        return result if np.isfinite(result) else 0.0
 
     @staticmethod
     def _calculate_pos_ratio(customer_id: str, db: Session) -> float:

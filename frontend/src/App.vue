@@ -52,49 +52,88 @@
             </div>
           </div>
 
-          <!-- Customer Selector (Improved Grid) -->
-          <div class="mb-8">
-            <h2 class="text-lg font-semibold text-gray-900 mb-4">👤 Select Customer</h2>
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-w-6xl">
-              <button
-                v-for="customer in store.customers"
-                :key="customer.customer_id"
-                @click="store.selectCustomer(customer.customer_id)"
-                :class="{
-                  'ring-2 ring-brand-500 bg-brand-50 border-brand-300': store.selectedCustomerId === customer.customer_id,
-                  'bg-white border-gray-200 hover:border-gray-300 hover:shadow-md': store.selectedCustomerId !== customer.customer_id
-                }"
-                class="p-3 rounded-lg border-2 transition-all duration-200 text-left"
-              >
-                <!-- Risk Indicator Circle -->
-                <div class="flex items-start justify-between mb-2">
-                  <div class="flex-1">
-                    <div class="font-semibold text-sm text-gray-900 truncate">{{ customer.name }}</div>
-                  </div>
-                  <div
+          <!-- Customer Selector (Dropdown with Search) -->
+          <div class="mb-8 relative" ref="selectorRef">
+            <label class="block text-sm font-semibold text-gray-700 mb-2">👤 Select Customer</label>
+            <!-- Trigger button -->
+            <button
+              @click="dropdownOpen = !dropdownOpen"
+              class="w-full max-w-xl flex items-center justify-between px-4 py-2.5 bg-white border-2 border-gray-200 rounded-lg hover:border-brand-400 transition-colors text-left"
+              :class="{ 'border-brand-500 ring-2 ring-brand-100': dropdownOpen }"
+            >
+              <span v-if="store.selectedCustomerId" class="flex items-center gap-3">
+                <span class="font-medium text-gray-900 text-sm">
+                  {{ store.customers.find(c => c.customer_id === store.selectedCustomerId)?.name || store.selectedCustomerId }}
+                </span>
+                <span class="text-xs text-gray-500">{{ store.selectedCustomerId }}</span>
+                <span
+                  v-if="store.customers.find(c => c.customer_id === store.selectedCustomerId)?.pattern"
+                  class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded"
+                >
+                  {{ store.customers.find(c => c.customer_id === store.selectedCustomerId)?.pattern }}
+                </span>
+              </span>
+              <span v-else class="text-gray-400 text-sm">Choose a customer...</span>
+              <svg class="w-4 h-4 text-gray-400 flex-shrink-0 transition-transform" :class="{ 'rotate-180': dropdownOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+              </svg>
+            </button>
+
+            <!-- Dropdown panel -->
+            <div
+              v-if="dropdownOpen"
+              class="absolute z-50 mt-1 w-full max-w-xl bg-white border border-gray-200 rounded-lg shadow-lg"
+            >
+              <!-- Search input -->
+              <div class="p-2 border-b border-gray-100">
+                <div class="relative">
+                  <svg class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                  </svg>
+                  <input
+                    v-model="customerSearch"
+                    ref="searchInput"
+                    type="text"
+                    placeholder="Search by name or ID..."
+                    class="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:border-brand-400"
+                  />
+                </div>
+              </div>
+              <!-- Customer list -->
+              <div class="max-h-72 overflow-y-auto">
+                <button
+                  v-for="customer in filteredCustomers"
+                  :key="customer.customer_id"
+                  @click="selectAndClose(customer.customer_id)"
+                  class="w-full flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 text-left transition-colors"
+                  :class="{ 'bg-brand-50': store.selectedCustomerId === customer.customer_id }"
+                >
+                  <span class="flex items-center gap-3 min-w-0">
+                    <span class="font-medium text-sm text-gray-900 truncate">{{ customer.name }}</span>
+                    <span class="text-xs text-gray-400 flex-shrink-0">{{ customer.customer_id }}</span>
+                    <span v-if="customer.pattern" class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded flex-shrink-0">
+                      {{ customer.pattern }}
+                    </span>
+                  </span>
+                  <span
                     v-if="customer.churn_risk_score !== undefined"
                     :class="{
                       'bg-red-100 text-red-700': customer.churn_risk_score > 70,
                       'bg-yellow-100 text-yellow-700': customer.churn_risk_score >= 40 && customer.churn_risk_score <= 70,
                       'bg-green-100 text-green-700': customer.churn_risk_score < 40
                     }"
-                    class="text-xs font-bold px-2 py-1 rounded-full flex-shrink-0"
+                    class="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ml-2"
                   >
                     {{ Math.round(customer.churn_risk_score) }}%
-                  </div>
-                </div>
-                <!-- Customer ID -->
-                <div class="text-xs text-gray-500 truncate mb-2">{{ customer.customer_id }}</div>
-                <!-- Status Badge -->
-                <div class="flex gap-1 flex-wrap">
-                  <span
-                    v-if="customer.pattern"
-                    class="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded"
-                  >
-                    {{ customer.pattern }}
                   </span>
+                </button>
+                <div v-if="filteredCustomers.length === 0" class="px-4 py-3 text-sm text-gray-400 text-center">
+                  No customers found
                 </div>
-              </button>
+              </div>
+              <div class="px-4 py-2 border-t border-gray-100 text-xs text-gray-400 text-right">
+                {{ filteredCustomers.length }} of {{ store.customers.length }} customers
+              </div>
             </div>
           </div>
 
@@ -276,7 +315,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useCustomerStore } from './stores/customer'
 import Dashboard from './components/Dashboard.vue'
 import TrendChart from './components/TrendChart.vue'
@@ -294,7 +333,47 @@ const visualizationTabs = ['Trends', 'Anomalies', 'Risk Drivers', 'Features']
 const showUC1Info = ref(false)  // UC-1 Spending Trends info
 const showUC2Info = ref(false)  // UC-2 Churn Prediction info
 
+// Customer dropdown state
+const dropdownOpen = ref(false)
+const customerSearch = ref('')
+const selectorRef = ref(null)
+const searchInput = ref(null)
+
+const filteredCustomers = computed(() => {
+  const q = customerSearch.value.toLowerCase().trim()
+  if (!q) return store.customers
+  return store.customers.filter(c =>
+    c.customer_id.toLowerCase().includes(q) ||
+    (c.name || '').toLowerCase().includes(q) ||
+    (c.pattern || '').toLowerCase().includes(q)
+  )
+})
+
+function selectAndClose(customerId) {
+  store.selectCustomer(customerId)
+  dropdownOpen.value = false
+  customerSearch.value = ''
+}
+
+// Close dropdown when clicking outside
+function handleClickOutside(e) {
+  if (selectorRef.value && !selectorRef.value.contains(e.target)) {
+    dropdownOpen.value = false
+    customerSearch.value = ''
+  }
+}
+
+// Focus search when dropdown opens
+import { watch } from 'vue'
+watch(dropdownOpen, async (open) => {
+  if (open) {
+    await nextTick()
+    searchInput.value?.focus()
+  }
+})
+
 onMounted(async () => {
+  document.addEventListener('mousedown', handleClickOutside)
   // Auto-load data from database on app startup
   try {
     // Load customers (from database - already persisted)
@@ -309,5 +388,9 @@ onMounted(async () => {
   } catch (err) {
     console.error('Failed to load data:', err)
   }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', handleClickOutside)
 })
 </script>

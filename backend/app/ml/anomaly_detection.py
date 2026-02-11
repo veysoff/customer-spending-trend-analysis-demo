@@ -58,12 +58,13 @@ class AnomalyDetector:
         # Score each transaction against behavioral pattern
         for idx, row in transaction_df.iterrows():
             trans_amount = row["amount"]
-            monthly_avg = transaction_df["amount"].mean()
-            deviation = abs(trans_amount - monthly_avg) / (monthly_avg + 1)
+            # Use pre-computed mean (not per-row mean) for consistency
+            deviation = abs(trans_amount - mean_amount) / mean_amount if mean_amount > 0 else 0.0
 
             # Detect spending spikes (adaptive threshold)
             if trans_amount > spike_threshold:
-                z_score = (trans_amount - mean_amount) / (std_amount + 1e-6)
+                safe_std = std_amount if std_amount > 0 else 1.0
+                z_score = (trans_amount - mean_amount) / safe_std
                 # Issue #17 fix: Check for NULL date before formatting
                 date_str = row["date"].strftime("%Y-%m-%d") if pd.notna(row["date"]) else "Unknown"
                 anomalies.append({

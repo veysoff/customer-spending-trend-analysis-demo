@@ -145,7 +145,7 @@ class SyntheticDataGenerator:
                 for day, hour, minute, amount, mcc, channel, merchant, country in transactions:
                     # Apply category shift for lifestyle_shift pattern
                     if pattern == "lifestyle_shift" and month >= 7:
-                        if np.random.random() < 0.4:  # 40% category shift
+                        if self.rng.random() < 0.4:  # 40% category shift
                             mcc = "5411"  # Force GROCERY
 
                     # Calculate date relative to start_date
@@ -192,10 +192,11 @@ class SyntheticDataGenerator:
         - "churned": churned, very high dormancy (180+ days), inactive for long time
         """
         if churn_pattern == "stable":
+            credit_limit = float(self.rng.uniform(8000, 25000))
             return {
-                "credit_limit": self.rng.uniform(8000, 25000),
-                "current_balance": self.rng.uniform(1000, 5000),
-                "annual_income": self.rng.uniform(30000, 120000),
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.05, 0.35) * credit_limit),  # 5-35% utilization
+                "annual_income": float(self.rng.uniform(30000, 120000)),
                 "is_churned": 0,
                 "support_tickets_count": int(self.rng.poisson(1)),
                 "complaint_severity": "LOW",
@@ -205,10 +206,11 @@ class SyntheticDataGenerator:
                 "total_late_payments": 0,
             }
         elif churn_pattern == "churning":
+            credit_limit = float(self.rng.uniform(5000, 15000))
             return {
-                "credit_limit": self.rng.uniform(5000, 15000),
-                "current_balance": self.rng.uniform(8000, 15000),
-                "annual_income": self.rng.uniform(25000, 80000),
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.60, 0.90) * credit_limit),  # 60-90% utilization (stressed)
+                "annual_income": float(self.rng.uniform(25000, 80000)),
                 "is_churned": 1,
                 "support_tickets_count": int(self.rng.poisson(5)),
                 "complaint_severity": "HIGH",
@@ -218,10 +220,11 @@ class SyntheticDataGenerator:
                 "total_late_payments": int(self.rng.integers(1, 5)),
             }
         elif churn_pattern == "at_risk":
+            credit_limit = float(self.rng.uniform(10000, 30000))
             return {
-                "credit_limit": self.rng.uniform(10000, 30000),
-                "current_balance": self.rng.uniform(2000, 8000),
-                "annual_income": self.rng.uniform(40000, 150000),
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.35, 0.65) * credit_limit),  # 35-65% utilization
+                "annual_income": float(self.rng.uniform(40000, 150000)),
                 "is_churned": 0,
                 "support_tickets_count": int(self.rng.poisson(3)),
                 "complaint_severity": "MEDIUM",
@@ -230,11 +233,12 @@ class SyntheticDataGenerator:
                 "max_payment_delay_days": int(self.rng.integers(5, 15)),
                 "total_late_payments": 0,
             }
-        else:  # churned
+        else:  # churned (long-term inactive)
+            credit_limit = float(self.rng.uniform(3000, 10000))
             return {
-                "credit_limit": self.rng.uniform(3000, 10000),
-                "current_balance": self.rng.uniform(5000, 9000),
-                "annual_income": self.rng.uniform(20000, 60000),
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.40, 0.75) * credit_limit),  # 40-75% utilization
+                "annual_income": float(self.rng.uniform(20000, 60000)),
                 "is_churned": 1,
                 "support_tickets_count": int(self.rng.poisson(2)),
                 "complaint_severity": "MEDIUM",

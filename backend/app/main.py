@@ -23,6 +23,8 @@ from .ml.trend_detection import TrendDetector
 from .ml.anomaly_detection import AnomalyDetector
 from .ml.explainability import ExplainabilityEngine
 from .ml.narrative_engine import NarrativeEngine, NarrativeCache
+from .ml.weighted_trend import WeightedTrendCalculator  # Fix #3: Weighted trend
+from .ml.seasonality_detection import SeasonalityDetector  # Fix #4: Seasonality detection
 
 # Configure logging
 logging.basicConfig(level=config.LOG_LEVEL)
@@ -258,7 +260,18 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
 
     trend_detector = TrendDetector()
     # Forecast 90 days ahead (~3 months) for better visibility
-    trend_result = trend_detector.detect_trend(customer_df, periods_ahead=90)
+    trend_result = trend_detector.detect_trend(customer_df, periods_ahead=12)
+
+    # FIX #3: Add weighted trend analysis
+    weighted_trend = WeightedTrendCalculator.calculate_weighted_trend(
+        customer_df,
+        window_days=90,
+        recency_weight=3.0
+    )
+    acceleration = WeightedTrendCalculator.calculate_acceleration(customer_df)
+
+    # FIX #4: Add seasonality detection
+    seasonality_detection = SeasonalityDetector.detect_seasonality(customer_df)
 
     return TrendResponse(
         customer_id=customer_id,
@@ -280,7 +293,16 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
         seasonality_amplitude=trend_result.get("seasonality_amplitude", 0.0),
         has_seasonality=trend_result.get("has_seasonality", False),
         data_span_days=trend_result.get("data_span_days", 0),
-        metadata=trend_result.get("metadata", {})
+        metadata=trend_result.get("metadata", {}),
+        trend_analysis={  # FIX #3 & #4: New fields
+            "prophet_trend": {
+                "slope_per_month": trend_result.get("trend_slope_per_month", 0.0),
+                "slope_per_day": trend_result.get("trend_slope_per_day", 0.0)
+            },
+            "weighted_trend": weighted_trend,
+            "acceleration": acceleration,
+            "seasonality_detection": seasonality_detection
+        }
     )
 
 
@@ -373,27 +395,51 @@ async def get_customer_anomalies(customer_id: str, db: Session = Depends(get_db)
 
 @app.get("/api/customers/risk/high", response_model=AtRiskResponse)
 async def get_high_risk_customers(db: Session = Depends(get_db)) -> AtRiskResponse:
-    """Get list of high-risk customers using cached churn risk scores."""
+    """Get list of high-risk customers using live churn predictions."""
+    from .ml.churn_model import ChurnModelTrainer
+    from .ml.churn_features import ChurnFeatureEngineer
+
     repo = CustomerRepository(db)
     customers = repo.get_all(limit=None)  # Get all customers
 
     if not customers:
         raise HTTPException(status_code=500, detail="No customers found in database")
 
+    cached = load_cached_models()
+    model = cached.get("churn_model")
+    scaler = cached.get("feature_scaler")
+
     at_risk = []
     churn_risks = []
 
     for customer in customers:
-        # Use cached churn_risk_score from database if available
-        if customer.churn_risk_score is not None:
+        churn_risk = None
+
+        # Try live prediction first (most accurate)
+        if model and scaler:
+            try:
+                features_dict = ChurnFeatureEngineer.engineer_churn_features(customer.id, db)
+                feature_names = list(features_dict.keys())
+                feature_values = [features_dict[name] for name in feature_names]
+                X = pd.DataFrame([feature_values], columns=feature_names)
+                X_scaled = scaler.transform(X)
+                probability = model.predict_proba(X_scaled)[0]
+                churn_risk = float(probability[1])
+            except Exception:
+                pass
+
+        # Fall back to cached score if live prediction failed
+        if churn_risk is None and customer.churn_risk_score is not None:
             churn_risk = customer.churn_risk_score
+
+        if churn_risk is not None:
             churn_risks.append(churn_risk)
 
             if churn_risk >= 0.6:  # High risk threshold
                 at_risk.append({
                     "customer_id": customer.id,
                     "churn_risk": churn_risk,
-                    "risk_category": customer.risk_category or _get_risk_category(churn_risk),
+                    "risk_category": customer.risk_category or ("CRITICAL" if churn_risk >= 0.8 else "HIGH"),
                     "primary_signal": customer.primary_signal or "Activity pattern anomaly detected",
                     "recommended_action": customer.recommended_action or _get_recommended_action(churn_risk)
                 })

@@ -55,6 +55,7 @@ class TrendResponse(BaseModel):
     has_seasonality: bool
     data_span_days: int
     metadata: Optional[Dict] = None
+    trend_analysis: Optional[Dict] = None  # FIX #3 & #4: Weighted trend + seasonality detection
 
 
 class SHAPExplanation(BaseModel):

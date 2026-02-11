@@ -2,227 +2,331 @@ import pandas as pd
 import numpy as np
 from prophet import Prophet
 import logging
-from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-class TrendDetector:
-    """Detect spending trends using Prophet with corrected algorithms."""
 
-    def __init__(self, yearly_seasonality=True, weekly_seasonality=True,
-                 interval_width=0.95, growth="linear"):
+class TrendDetector:
+    """Detect spending trends using Prophet for banking transaction data.
+
+    Design decisions:
+
+    1. AGGREGATION: Weekly sums for Prophet training.
+       - Individual transactions: wrong unit (many per day, varying amounts)
+       - Daily zero-filled: high sparsity (~38%) creates dominant weekly noise
+         that completely hides the actual spending trend
+       - Weekly sums: correct unit — smooths intra-week variation, reveals
+         the true month-over-month spending direction
+       Week buckets are ISO weeks (Monday start).
+
+    2. DISPLAY: Daily actual values (individual transaction sums per day)
+       are shown as scatter points. The forecast line is the weekly Prophet
+       trend, resampled to daily for smooth rendering.
+
+    3. SEASONALITY: With weekly aggregation, yearly seasonality is the
+       meaningful signal (December +15%, August -20%).  Weekly seasonality
+       is disabled (aggregation already removes it).  Use conservative
+       prior so TREND dominates.
+
+    4. CONFIDENCE INTERVAL: 80% — practical, avoids overwhelming the chart.
+
+    5. FORECAST HORIZON: 12 weeks (~84 days).
+    """
+
+    def __init__(self, yearly_seasonality: bool = True, weekly_seasonality: bool = False,
+                 interval_width: float = 0.80, growth: str = "linear"):
         self.yearly_seasonality = yearly_seasonality
         self.weekly_seasonality = weekly_seasonality
-        self.interval_width = interval_width  # 95% confidence interval
+        self.interval_width = interval_width
         self.growth = growth
-        # Minimum data spans for reliable forecasting
-        self.MIN_DAYS_SPAN = 60  # 2 months minimum
-        self.MIN_TRANSACTIONS = 30  # 30+ transactions
-        self.MIN_DAYS_YEARLY = 365  # Need 1 year for yearly seasonality
-        self.MIN_DAYS_WEEKLY = 56  # Need 8+ weeks for weekly seasonality
+        self.MIN_WEEKS = 8           # need at least 8 data points for Prophet
+        self.MIN_TRANSACTIONS = 20
+        self.MIN_WEEKS_YEARLY = 52   # ~1 year for yearly seasonality
 
-    def detect_trend(self, customer_df: pd.DataFrame, periods_ahead: int = 90) -> dict:
-        """Fit Prophet model and return forecast with corrected calculations.
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-        Args:
-            customer_df: DataFrame with transaction data
-            periods_ahead: Number of days to forecast (default: 90 days = ~3 months)
+    @staticmethod
+    def _to_weekly(customer_df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate transactions to ISO-week sums.
 
-        Returns:
-            Dict with forecast_data, trend_slope_per_month, trend_slope_per_day,
-            seasonality_amplitude, and metadata
+        Returns DataFrame with columns ['ds', 'y']:
+          - ds: Monday of each ISO week (no gaps; zero for weeks with no spending)
+          - y: total spending that week
         """
-        # FIX #2: Proper data length validation (not just transaction count)
+        df = customer_df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+
+        # Floor to Monday of ISO week
+        df["week"] = df["date"] - pd.to_timedelta(df["date"].dt.weekday, unit="D")
+        df["week"] = df["week"].dt.normalize()  # strip time component
+
+        weekly = (
+            df.groupby("week")["amount"]
+            .sum()
+            .reset_index()
+            .rename(columns={"week": "ds", "amount": "y"})
+        )
+        weekly["ds"] = pd.to_datetime(weekly["ds"])
+
+        # Fill missing weeks with 0 (no spending that week = 0 demand)
+        week_range = pd.date_range(weekly["ds"].min(), weekly["ds"].max(), freq="W-MON")
+        weekly = weekly.set_index("ds").reindex(week_range, fill_value=0.0).reset_index()
+        weekly.columns = ["ds", "y"]
+
+        return weekly.sort_values("ds").reset_index(drop=True)
+
+    @staticmethod
+    def _to_daily_actuals(customer_df: pd.DataFrame) -> dict:
+        """Return dict of date -> daily spending sum (for display only).
+
+        Only dates that have real transactions are included.
+        """
+        df = customer_df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        daily = (
+            df.groupby(df["date"].dt.date)["amount"]
+            .sum()
+        )
+        return {pd.Timestamp(d): float(v) for d, v in daily.items()}
+
+    @staticmethod
+    def _compute_cv(values: np.ndarray) -> float:
+        """Coefficient of variation on non-zero values only."""
+        nonzero = values[values > 0]
+        if len(nonzero) == 0:
+            return 0.0
+        mean_val = float(np.mean(nonzero))
+        if mean_val <= 0:
+            return 0.0
+        return float(np.std(nonzero) / mean_val)
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def detect_trend(self, customer_df: pd.DataFrame, periods_ahead: int = 12) -> dict:
+        """Fit Prophet on weekly sums and return daily-resampled forecast + metrics.
+
+        periods_ahead: number of weeks to forecast (default 12 = ~3 months)
+        """
         if len(customer_df) < self.MIN_TRANSACTIONS:
-            logger.warning(f"Too few transactions: {len(customer_df)} (need {self.MIN_TRANSACTIONS}+)")
+            logger.warning(f"Too few transactions: {len(customer_df)}")
             return self._empty_forecast()
 
-        # Calculate date span
-        date_min = customer_df["date"].min()
-        date_max = customer_df["date"].max()
-        days_span = (date_max - date_min).days
+        date_min = pd.to_datetime(customer_df["date"]).min()
+        date_max = pd.to_datetime(customer_df["date"]).max()
+        days_span = int((date_max - date_min).days)
+        weeks_span = days_span // 7
 
-        if days_span < self.MIN_DAYS_SPAN:
-            logger.warning(f"Data span too short: {days_span} days (need {self.MIN_DAYS_SPAN}+)")
+        if weeks_span < self.MIN_WEEKS:
+            logger.warning(f"Data span too short: {weeks_span} weeks")
             return self._empty_forecast()
 
-        # FIX #5 & #6: Adaptive seasonality settings based on data span
-        # Determine what seasonality we can safely use
-        use_yearly_seasonality = self.yearly_seasonality and (days_span >= self.MIN_DAYS_YEARLY)
-        use_weekly_seasonality = self.weekly_seasonality and (days_span >= self.MIN_DAYS_WEEKLY)
+        # Weekly aggregation — correct unit for trend detection
+        weekly = self._to_weekly(customer_df)
 
-        # FIX #5: Adaptive changepoint prior based on data span
-        if days_span < 180:
-            # Short data: more flexible
-            changepoint_prior_scale = 0.05
-        elif days_span < 730:
-            # Medium data: balanced
-            changepoint_prior_scale = 0.01
+        # Daily actuals for display (scatter dots)
+        daily_actuals = self._to_daily_actuals(customer_df)
+
+        # Characterise pattern (for metadata)
+        cv = self._compute_cv(weekly["y"].values)
+        zero_weeks = int(np.sum(weekly["y"] == 0))
+        sparsity = float(zero_weeks / len(weekly))
+
+        # --- Seasonality flags ------------------------------------------------
+        use_yearly = bool(self.yearly_seasonality and weeks_span >= self.MIN_WEEKS_YEARLY)
+        # Weekly seasonality is intentionally disabled: we are already aggregating
+        # by week, so there is no sub-weekly variation left to model.
+        use_weekly = False
+
+        # --- Prophet hyperparameters ------------------------------------------
+        # Changepoint: allow trend to change, but not overfit
+        if weeks_span < 26:
+            cp_scale = 0.1
+        elif weeks_span < 78:
+            cp_scale = 0.05
         else:
-            # Long data: strict (avoid noise)
-            changepoint_prior_scale = 0.001
+            cp_scale = 0.01
 
-        # FIX #6: Adaptive seasonality prior based on data span
-        if days_span >= self.MIN_DAYS_YEARLY:
-            seasonality_prior_scale = 10.0  # Can be aggressive with 1+ year data
-        elif days_span >= self.MIN_DAYS_WEEKLY:
-            seasonality_prior_scale = 5.0  # Moderate for 8+ weeks
-        else:
-            seasonality_prior_scale = 1.0  # Conservative for shorter spans
-
-        # Aggregate daily spending
-        daily_spending = customer_df.groupby(customer_df["date"].dt.date).agg(
-            {"amount": "sum"}
-        ).reset_index()
-        daily_spending.columns = ["ds", "y"]
-        daily_spending["ds"] = pd.to_datetime(daily_spending["ds"])
+        # Seasonality prior: keep it small so TREND is dominant in the visual
+        sp_scale = 5.0 if use_yearly else 1.0
 
         try:
             model = Prophet(
-                yearly_seasonality=use_yearly_seasonality,
-                weekly_seasonality=use_weekly_seasonality,
+                yearly_seasonality=use_yearly,
+                weekly_seasonality=use_weekly,
                 daily_seasonality=False,
                 interval_width=self.interval_width,
                 growth=self.growth,
                 seasonality_mode="additive",
-                seasonality_prior_scale=seasonality_prior_scale,
-                changepoint_prior_scale=changepoint_prior_scale
+                seasonality_prior_scale=sp_scale,
+                changepoint_prior_scale=cp_scale,
             )
-            model.fit(daily_spending)
+            model.fit(weekly)
 
-            # Forecast ahead
-            future = model.make_future_dataframe(periods=periods_ahead)
+            # Forecast from last data point to today + periods_ahead weeks.
+            # For dormant customers whose data ended months ago, this extends
+            # the forecast all the way through the gap to the current date.
+            today = pd.Timestamp.now().normalize()
+            last_data_week = weekly["ds"].iloc[-1]
+            weeks_to_today = max(0, int((today - last_data_week).days // 7))
+            total_periods = weeks_to_today + periods_ahead
+
+            future = model.make_future_dataframe(periods=total_periods, freq="W")
             forecast = model.predict(future)
 
-            # FIX #1: Calculate trend slope from FUTURE forecast (not historical)
-            # CORRECTED: Use forward-looking trend to show where spending is GOING
-            historical_len = len(daily_spending)
+            # --- Trend slope (forward-looking, per month) ---------------------
+            hist_len = len(weekly)
+            trend_slope_per_day = 0.0
+            trend_slope_per_month = 0.0
 
-            # Calculate trend slope from future portion of forecast (next 30 days)
-            # This shows the direction customer spending is heading
-            if historical_len + 30 < len(forecast):
-                # Extract future trend portion (30 days ahead)
-                future_portion = forecast.iloc[historical_len:historical_len+30]["trend"].values
+            # Use future portion of forecast for forward-looking slope
+            future_trend = forecast.iloc[hist_len:]["trend"].values
+            if len(future_trend) > 1:
+                x = np.arange(len(future_trend), dtype=float)
+                # slope_per_week = change in weekly spending per week
+                # * 4.33 = monthly change in weekly spending (AED/week per month)
+                slope_per_week = float(np.polyfit(x, future_trend, 1)[0])
+                trend_slope_per_day = slope_per_week / 7.0
+                trend_slope_per_month = slope_per_week * 4.33
+            elif hist_len >= 4:
+                # Fallback: use last 4 weeks of history
+                hist_trend = forecast.iloc[max(0, hist_len - 4):hist_len]["trend"].values
+                if len(hist_trend) > 1:
+                    x = np.arange(len(hist_trend), dtype=float)
+                    slope_per_week = float(np.polyfit(x, hist_trend, 1)[0])
+                    trend_slope_per_day = slope_per_week / 7.0
+                    trend_slope_per_month = slope_per_week * 4.33
 
-                if len(future_portion) > 1:
-                    # Calculate slope from future trend (shows forecast direction)
-                    x_values = np.arange(len(future_portion))
-                    z = np.polyfit(x_values, future_portion, 1)
-                    trend_slope_per_day = float(z[0])  # AED per day (FUTURE direction)
+            # --- Seasonality amplitude ----------------------------------------
+            seasonality_amplitude = 0.0
+            # Prophet stores yearly seasonality in 'yearly' column if enabled
+            seasonal_col = "yearly" if use_yearly and "yearly" in forecast.columns else None
+            if seasonal_col:
+                hist_seasonal = forecast[seasonal_col].iloc[:hist_len]
+                hist_mean = float(weekly["y"].mean())
+                if float(hist_seasonal.std()) > 0 and hist_mean > 0:
+                    seasonality_amplitude = float(hist_seasonal.std() / hist_mean)
 
-                    # Convert to per month (30 days)
-                    trend_slope_per_month = trend_slope_per_day * 30
-                else:
-                    trend_slope_per_day = 0.0
-                    trend_slope_per_month = 0.0
-            else:
-                # Fallback: if not enough future data, use last 7 days of historical
-                if historical_len >= 7:
-                    historical_trend = forecast.iloc[max(0, historical_len-7):historical_len]["trend"].values
-                    if len(historical_trend) > 1:
-                        x_values = np.arange(len(historical_trend))
-                        z = np.polyfit(x_values, historical_trend, 1)
-                        trend_slope_per_day = float(z[0])
-                        trend_slope_per_month = trend_slope_per_day * 30
-                    else:
-                        trend_slope_per_day = 0.0
-                        trend_slope_per_month = 0.0
-                else:
-                    trend_slope_per_day = 0.0
-                    trend_slope_per_month = 0.0
-
-            # FIX #3: Calculate seasonality amplitude correctly (from historical data only)
-            if "seasonal" in forecast.columns:
-                # Use HISTORICAL seasonality only (not forecast which includes extrapolation noise)
-                historical_seasonal = forecast["seasonal"].iloc[:historical_len]
-                historical_mean = daily_spending["y"].mean()
-
-                if historical_seasonal.std() > 0 and historical_mean > 0:
-                    # Amplitude = standard deviation / mean (standard definition)
-                    seasonality_amplitude = historical_seasonal.std() / historical_mean
-                else:
-                    seasonality_amplitude = 0.0
-            else:
-                seasonality_amplitude = 0.0
-
-            # Determine if seasonality exists (threshold: >5%)
-            has_seasonality = seasonality_amplitude > 0.05
+            has_seasonality = bool(seasonality_amplitude > 0.05)
 
             return {
-                "forecast_data": self._format_forecast(daily_spending, forecast),
-                "trend_slope_per_day": float(trend_slope_per_day),  # Per DAY (explicit unit)
-                "trend_slope_per_month": float(trend_slope_per_month),  # Per MONTH (explicit unit)
-                "trend_slope": float(trend_slope_per_month),  # For backward compatibility
-                "trend_slope_unit": "AED/month",  # EXPLICIT UNIT
+                "forecast_data": self._format_forecast(weekly, forecast, daily_actuals),
+                "trend_slope_per_day": float(trend_slope_per_day),
+                "trend_slope_per_month": float(trend_slope_per_month),
+                "trend_slope": float(trend_slope_per_month),  # backward compat
+                "trend_slope_unit": "AED/month",
                 "seasonality_amplitude": float(seasonality_amplitude),
                 "has_seasonality": has_seasonality,
                 "model": model,
                 "data_span_days": days_span,
                 "metadata": {
-                    "yearly_seasonality_enabled": use_yearly_seasonality,
-                    "weekly_seasonality_enabled": use_weekly_seasonality,
-                    "changepoint_prior_scale": changepoint_prior_scale,
-                    "seasonality_prior_scale": seasonality_prior_scale
-                }
+                    "yearly_seasonality_enabled": use_yearly,
+                    "weekly_seasonality_enabled": use_weekly,
+                    "changepoint_prior_scale": float(cp_scale),
+                    "seasonality_prior_scale": float(sp_scale),
+                    "aggregation_level": "weekly",
+                    "weeks_in_history": hist_len,
+                    "weeks_forecast": periods_ahead,
+                    "coefficient_of_variation": float(cv),
+                    "sparsity_ratio": float(sparsity),
+                    "zero_weeks": zero_weeks,
+                    "is_intermittent_demand": bool(cv > 0.5 or sparsity > 0.3),
+                },
             }
+
         except Exception as e:
             logger.error(f"Prophet fitting error: {e}")
             return self._empty_forecast()
 
-    @staticmethod
-    def _format_forecast(actual: pd.DataFrame, forecast: pd.DataFrame) -> list:
-        """Format forecast output."""
-        data = []
+    # ------------------------------------------------------------------
+    # Format output
+    # ------------------------------------------------------------------
 
-        # Return all forecast data (historical + future forecast)
-        actual_len = len(actual)
-        for i in range(len(forecast)):  # Show ALL forecast rows (not limited by actual_len)
-            row = forecast.iloc[i]
-            if i < actual_len:
-                actual_val = actual.iloc[i]["y"]
-            else:
-                actual_val = None
+    @staticmethod
+    def _format_forecast(weekly: pd.DataFrame, forecast: pd.DataFrame,
+                         daily_actuals: dict) -> list:
+        """Return one row per week so that actuals and forecast are on the same scale.
+
+        Both actual and forecast represent AED spent in that ISO week (Monday–Sunday).
+        This is the only correct comparison: Prophet was trained on weekly sums,
+        so its output is weekly sums — the actuals must also be weekly sums.
+
+        Returns list of dicts with keys:
+          date        - Monday of the ISO week (YYYY-MM-DD)
+          actual      - real weekly spending sum (None for future weeks)
+          forecast    - Prophet yhat for that week
+          lower_bound - yhat_lower clipped to 0
+          upper_bound - yhat_upper
+        """
+        hist_len = len(weekly)
+
+        # Build actual weekly sums from daily_actuals dict
+        # Group daily actuals by their ISO week Monday
+        weekly_actuals: dict = {}
+        for day_ts, amount in daily_actuals.items():
+            monday = day_ts - pd.Timedelta(days=day_ts.weekday())
+            monday = monday.normalize()
+            weekly_actuals[monday] = weekly_actuals.get(monday, 0.0) + amount
+
+        # Last week in history
+        history_end = weekly["ds"].iloc[hist_len - 1]
+
+        data = []
+        for _, row in forecast.iterrows():
+            week_monday = row["ds"]
+            is_history = week_monday <= history_end
+
+            actual_val = weekly_actuals.get(week_monday, None) if is_history else None
+
+            yhat = float(row["yhat"])
+            yhat_lower = float(max(0.0, row["yhat_lower"]))
+            yhat_upper = float(max(0.0, row["yhat_upper"]))
 
             data.append({
-                "date": row["ds"].strftime("%Y-%m-%d"),
-                "actual": float(actual_val) if actual_val is not None else None,
-                "forecast": float(row["yhat"]),
-                "lower_bound": float(row["yhat_lower"]),
-                "upper_bound": float(row["yhat_upper"])
+                "date": week_monday.strftime("%Y-%m-%d"),
+                "actual": actual_val,
+                "forecast": max(0.0, yhat),
+                "lower_bound": yhat_lower,
+                "upper_bound": yhat_upper,
             })
 
         return data
 
+    # ------------------------------------------------------------------
+    # Empty fallback
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _empty_forecast() -> dict:
-        """Return empty forecast structure."""
         return {
             "forecast_data": [],
             "trend_slope_per_day": 0.0,
             "trend_slope_per_month": 0.0,
-            "trend_slope": 0.0,  # Backward compatibility
+            "trend_slope": 0.0,
             "trend_slope_unit": "AED/month",
             "has_seasonality": False,
             "seasonality_amplitude": 0.0,
             "model": None,
             "data_span_days": 0,
-            "metadata": {}
+            "metadata": {},
         }
+
+    # ------------------------------------------------------------------
+    # Category helper
+    # ------------------------------------------------------------------
 
     @staticmethod
     def get_trend_category(trend_slope_per_month: float) -> str:
-        """Categorize trend based on monthly slope.
+        """Categorize trend direction.
 
-        Args:
-            trend_slope_per_month: Slope in AED/month
-
-        Returns:
-            Category: INCREASING, STABLE, or DECREASING
+        slope_per_month = change in weekly spending per month (AED/week per month).
+        Thresholds: >+25 = INCREASING, <-25 = DECREASING, otherwise STABLE.
         """
-        # Thresholds in AED/month (adjusted for realistic values)
-        if trend_slope_per_month > 50:
+        if trend_slope_per_month > 25:
             return "INCREASING"
-        elif trend_slope_per_month < -50:
+        if trend_slope_per_month < -25:
             return "DECREASING"
-        else:
-            return "STABLE"
+        return "STABLE"

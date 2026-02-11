@@ -8,14 +8,11 @@
 
       <div class="mt-6 grid grid-cols-2 gap-4">
         <div>
-          <h3 class="text-sm font-medium text-gray-500">Trend Slope (Corrected)</h3>
+          <h3 class="text-sm font-medium text-gray-500">Weekly Spending Trend</h3>
           <p class="text-2xl font-bold mt-1" :class="trendClass">
-            {{ (trends.trend_slope_per_month || trends.trend_slope || 0).toFixed(2) }}
+            {{ (trends.trend_slope_per_month || trends.trend_slope || 0) > 0 ? '+' : '' }}{{ (trends.trend_slope_per_month || trends.trend_slope || 0).toFixed(0) }}
           </p>
-          <p class="text-xs text-gray-500 mt-1">{{ trends.trend_slope_unit || 'AED/month' }}</p>
-          <p class="text-xs text-gray-500">
-            {{ (trends.trend_slope_per_day || 0).toFixed(4) }} AED/day
-          </p>
+          <p class="text-xs text-gray-500 mt-1">AED/week change per month</p>
         </div>
         <div>
           <h3 class="text-sm font-medium text-gray-500">Seasonality</h3>
@@ -35,6 +32,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import ApexCharts from 'apexcharts'
+import { formatAxisValue, formatCurrency } from '@/utils/formatters'  // FIX #5: Formatting
+import { detectAnomalies, createAnomalyMarkers } from '@/utils/anomalyDetection'  // FIX #5: Anomaly highlighting
 
 const props = defineProps({
   trends: {
@@ -48,19 +47,27 @@ const chartInstance = ref(null)
 const trendClass = computed(() => {
   // Use corrected trend_slope_per_month (or fallback to trend_slope for backward compat)
   const slope = props.trends.trend_slope_per_month ?? props.trends.trend_slope ?? 0
-  if (slope > 50) return 'text-green-600'
-  if (slope < -50) return 'text-red-600'
+  if (slope > 25) return 'text-green-600'
+  if (slope < -25) return 'text-red-600'
   return 'text-gray-600'
 })
 
 const renderChart = () => {
   if (!props.trends || !props.trends.trend_data) return
 
-  const dates = props.trends.trend_data.map(d => d.date)
+  // Ensure dates are strings (ApexCharts requires string format)
+  const dates = props.trends.trend_data.map(d => {
+    const dateStr = d.date ? String(d.date).trim() : ''
+    return dateStr
+  })
+
   const actuals = props.trends.trend_data.map(d => d.actual || null)
-  const forecasts = props.trends.trend_data.map(d => d.forecast)
-  const lowerBounds = props.trends.trend_data.map(d => d.lower_bound)
-  const upperBounds = props.trends.trend_data.map(d => d.upper_bound)
+  const forecasts = props.trends.trend_data.map(d => d.forecast || 0)
+  const lowerBounds = props.trends.trend_data.map(d => d.lower_bound || 0)
+  const upperBounds = props.trends.trend_data.map(d => d.upper_bound || 0)
+
+  // FIX #5: Detect anomalies
+  const anomalies = detectAnomalies(actuals, forecasts)
 
   const options = {
     chart: {
@@ -90,7 +97,10 @@ const renderChart = () => {
     },
     yaxis: {
       title: {
-        text: 'Spending (AED)'
+        text: 'Spending (AED/week)'
+      },
+      labels: {
+        formatter: (val) => formatAxisValue(val)
       }
     },
     legend: {
@@ -102,35 +112,49 @@ const renderChart = () => {
         format: 'MMM dd, yyyy'
       },
       y: {
-        formatter: (val) => val ? 'AED ' + val.toFixed(2) : 'N/A'
+        formatter: (val) => val ? formatCurrency(val, 2) : 'N/A'
       }
+    },
+    annotations: {
+      points: createAnomalyMarkers(dates, actuals, anomalies)
     }
   }
 
   const series = [
     {
       name: 'Actual Spending',
-      data: actuals,
+      data: actuals.map((val, i) => ({
+        x: dates[i],
+        y: val,
+        fillColor: anomalies[i] ? '#dc2626' : '#0284c7'
+      })),
       color: '#0284c7'
     },
     {
       name: 'Forecast',
-      data: forecasts,
+      data: forecasts.map((val, i) => ({
+        x: dates[i],
+        y: val
+      })),
       color: '#f59e0b'
     },
     {
-      name: 'Upper Bound (95% CI)',
-      data: upperBounds,
+      name: 'Upper Bound (80% CI)',
+      data: upperBounds.map((val, i) => ({
+        x: dates[i],
+        y: val
+      })),
       color: '#e5e7eb',
-      type: 'line',
-      strokeWidth: 0.5
+      type: 'line'
     },
     {
-      name: 'Lower Bound (95% CI)',
-      data: lowerBounds,
+      name: 'Lower Bound (80% CI)',
+      data: lowerBounds.map((val, i) => ({
+        x: dates[i],
+        y: val
+      })),
       color: '#e5e7eb',
-      type: 'line',
-      strokeWidth: 0.5
+      type: 'line'
     }
   ]
 
