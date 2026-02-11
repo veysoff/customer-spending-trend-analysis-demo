@@ -33,8 +33,49 @@ class FeatureEngineer:
 
         features = {}
 
+        # Safety check: ensure we have data
+        if len(customer_df) == 0:
+            # Return default empty features
+            features["monthly_spending"] = []
+            features["transaction_count"] = []
+            features["avg_transaction_amount"] = []
+            features["unique_categories"] = []
+            features["spending_volatility"] = [0]
+            features["trend_slope"] = 0.0
+            features["category_entropy"] = 0.0
+            features["pos_ratio"] = 0
+            features["online_ratio"] = 0
+            features["atm_ratio"] = 0
+            features["weekend_ratio"] = 0
+            features["current_monthly_spending"] = 0
+            features["current_trans_count"] = 0
+            return features
+
         # Aggregate by month
         customer_df = customer_df.copy()
+
+        # Remove rows with NULL dates before processing
+        if customer_df["date"].isnull().any():
+            customer_df = customer_df.dropna(subset=['date'])
+
+        # Recheck after dropping NULLs
+        if len(customer_df) == 0:
+            # Return default empty features if all dates were NULL
+            features["monthly_spending"] = []
+            features["transaction_count"] = []
+            features["avg_transaction_amount"] = []
+            features["unique_categories"] = []
+            features["spending_volatility"] = [0]
+            features["trend_slope"] = 0.0
+            features["category_entropy"] = 0.0
+            features["pos_ratio"] = 0
+            features["online_ratio"] = 0
+            features["atm_ratio"] = 0
+            features["weekend_ratio"] = 0
+            features["current_monthly_spending"] = 0
+            features["current_trans_count"] = 0
+            return features
+
         customer_df["year_month"] = customer_df["date"].dt.to_period("M")
 
         monthly_data = customer_df.groupby("year_month").agg({
@@ -59,19 +100,25 @@ class FeatureEngineer:
         else:
             features["spending_volatility"] = [0]
 
-        # Trend slope (simple linear regression)
+        # Trend slope (simple linear regression) — slope per month
         if len(monthly_data) > 1:
-            x = np.arange(len(monthly_data))
-            y = monthly_data["monthly_sum"].values
-            slope = np.polyfit(x, y, 1)[0]
-            features["trend_slope"] = slope
+            x = np.arange(len(monthly_data))  # Month index (0, 1, 2, ...)
+            y = monthly_data["monthly_sum"].values  # Spending values
+            slope_per_month = np.polyfit(x, y, 1)[0]  # AED per month
+            features["trend_slope"] = float(slope_per_month)
         else:
-            features["trend_slope"] = 0
+            features["trend_slope"] = 0.0
 
-        # Category entropy (diversity)
-        category_counts = customer_df["mcc_category"].value_counts()
-        category_probs = (category_counts / len(customer_df)).values
-        features["category_entropy"] = entropy(category_probs)
+        # Category entropy (diversity) - safe calculation
+        if len(customer_df) == 0:
+            features["category_entropy"] = 0.0
+        else:
+            category_counts = customer_df["mcc_category"].value_counts()
+            if len(category_counts) == 0:
+                features["category_entropy"] = 0.0
+            else:
+                category_probs = (category_counts / len(customer_df)).values
+                features["category_entropy"] = float(entropy(category_probs))
 
         # Channel distribution
         channel_dist = customer_df["channel"].value_counts(normalize=True)
@@ -99,13 +146,24 @@ class FeatureEngineer:
     @staticmethod
     def get_feature_vector(features: Dict[str, Any]) -> np.ndarray:
         """Convert features to numpy array for ML models."""
+        # Safe extraction of list-based features (handle empty lists)
+        # Check length explicitly, not just truthiness (e.g., [0] is truthy but may be placeholder)
+        spending_volatility = features.get("spending_volatility", [0])
+        spending_vol_value = float(spending_volatility[-1]) if len(spending_volatility) > 0 else 0.0
+
+        unique_categories = features.get("unique_categories", [0])
+        unique_cat_value = float(unique_categories[-1]) if len(unique_categories) > 0 else 0.0
+
+        avg_trans_amount = features.get("avg_transaction_amount", [0])
+        avg_amount_value = float(avg_trans_amount[-1]) if len(avg_trans_amount) > 0 else 0.0
+
         return np.array([
             features.get("trend_slope", 0),
-            features.get("spending_volatility", [0])[-1],
+            spending_vol_value,
             features.get("current_monthly_spending", 0),
-            features.get("unique_categories", [0])[-1],
+            unique_cat_value,
             features.get("category_entropy", 0),
             features.get("online_ratio", 0),
             features.get("weekend_ratio", 0),
-            features.get("avg_transaction_amount", [0])[-1],
+            avg_amount_value,
         ]).reshape(1, -1)

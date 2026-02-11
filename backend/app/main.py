@@ -272,9 +272,15 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
             }
             for item in trend_result["forecast_data"]
         ],
-        trend_slope=trend_result["trend_slope"],
-        seasonality_pattern="yearly_and_weekly",
-        seasonality_amplitude=trend_result.get("seasonality_amplitude", 0.15)  # Use computed value
+        trend_slope_per_month=trend_result.get("trend_slope_per_month", 0.0),  # Corrected calculation
+        trend_slope_per_day=trend_result.get("trend_slope_per_day", 0.0),  # Reference
+        trend_slope=trend_result.get("trend_slope", 0.0),  # Backward compatibility
+        trend_slope_unit="AED/month",
+        seasonality_pattern="yearly_and_weekly" if trend_result.get("has_seasonality") else "none",
+        seasonality_amplitude=trend_result.get("seasonality_amplitude", 0.0),
+        has_seasonality=trend_result.get("has_seasonality", False),
+        data_span_days=trend_result.get("data_span_days", 0),
+        metadata=trend_result.get("metadata", {})
     )
 
 

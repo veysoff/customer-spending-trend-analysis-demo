@@ -48,6 +48,7 @@ class ChurnModelTrainer:
         'random_state': 42,
         'eval_metric': 'logloss',
         'verbose': 0,
+        'scale_pos_weight': None,  # Will be calculated during training based on class distribution
     }
 
     MODEL_DIR = Path(__file__).parent / "models"
@@ -154,14 +155,27 @@ class ChurnModelTrainer:
             Trained XGBClassifier model
         """
         logger.info("Training XGBoost model...")
-        logger.info(f"Hyperparameters: {self.MODEL_PARAMS}")
+
+        # Calculate scale_pos_weight to handle class imbalance
+        # scale_pos_weight = count(negative examples) / count(positive examples)
+        n_negative = (y_train == 0).sum()
+        n_positive = (y_train == 1).sum()
+        scale_pos_weight = n_negative / n_positive if n_positive > 0 else 1.0
+
+        logger.info(f"Class imbalance: {n_negative} negative, {n_positive} positive")
+        logger.info(f"Scale pos weight: {scale_pos_weight:.2f}")
+
+        # Update model params with calculated scale_pos_weight
+        model_params = self.MODEL_PARAMS.copy()
+        model_params['scale_pos_weight'] = scale_pos_weight
+        logger.info(f"Hyperparameters: {model_params}")
 
         # Scale features
         self.scaler = StandardScaler()
         X_train_scaled = self.scaler.fit_transform(X_train)
 
-        # Train model
-        self.model = XGBClassifier(**self.MODEL_PARAMS)
+        # Train model with class imbalance handling
+        self.model = XGBClassifier(**model_params)
         self.model.fit(
             X_train_scaled, y_train,
             verbose=False

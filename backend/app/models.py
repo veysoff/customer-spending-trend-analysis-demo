@@ -46,9 +46,15 @@ class TrendDataPoint(BaseModel):
 class TrendResponse(BaseModel):
     customer_id: str
     trend_data: List[TrendDataPoint]
-    trend_slope: float
+    trend_slope_per_month: float  # AED per month (CORRECTED)
+    trend_slope_per_day: float  # AED per day (for reference)
+    trend_slope: float  # Backward compatibility (same as trend_slope_per_month)
+    trend_slope_unit: str = "AED/month"  # Explicit unit
     seasonality_pattern: str
     seasonality_amplitude: float
+    has_seasonality: bool
+    data_span_days: int
+    metadata: Optional[Dict] = None
 
 
 class SHAPExplanation(BaseModel):

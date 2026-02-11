@@ -66,15 +66,20 @@ class ChurnFeatureEngineer:
         - High utilization (>0.8) indicates high debt/activity
         - Low utilization (<0.2) indicates inactive account
         """
+        # Safe NULL checks for both values
         if not customer.credit_limit or customer.credit_limit == 0:
             return 0.0
 
-        utilization = customer.current_balance / customer.credit_limit
+        balance = customer.current_balance if customer.current_balance is not None else 0.0
+        if balance == 0:
+            return 0.0
+
+        utilization = balance / customer.credit_limit
         return min(utilization, 2.0)  # Cap at 2.0
 
     @staticmethod
     def calculate_dormancy(customer: Customer) -> float:
-        """Calculate days since last transaction.
+        """Calculate days since last transaction (timezone-aware).
 
         Metric of inactivity/dormancy:
         - 0-30 days: Active
@@ -85,26 +90,40 @@ class ChurnFeatureEngineer:
         if not customer.last_transaction_date:
             return 365  # No transactions = very dormant
 
-        days_since = (datetime.utcnow() - customer.last_transaction_date).days
+        # Handle timezone-aware/naive datetime comparison
+        last_transaction = customer.last_transaction_date
+        now = datetime.utcnow()
+
+        # Remove timezone info if present for consistent comparison
+        if last_transaction.tzinfo is not None:
+            last_transaction = last_transaction.replace(tzinfo=None)
+        if now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+
+        days_since = (now - last_transaction).days
         return float(max(0, days_since))
 
     @staticmethod
     def calculate_payment_delay_score(customer: Customer) -> float:
         """Calculate payment behavior risk score (0.0 to 1.0).
 
-        Based on:
-        - max_payment_delay_days: Each 10 days adds 0.1 to score
-        - total_late_payments: Each late payment adds 0.05
+        Weighted combination:
+        - max_payment_delay_days (weight 0.6): 60+ days = full risk
+        - total_late_payments (weight 0.4): 5+ payments = full risk
         """
-        score = 0.0
-
+        # Normalize delay days to 0.0-1.0 (60 days = max risk)
+        max_delay_normalized = 0.0
         if customer.max_payment_delay_days:
-            score += min(customer.max_payment_delay_days / 10.0, 0.5)
+            max_delay_normalized = min(customer.max_payment_delay_days / 60.0, 1.0)
 
+        # Normalize late payments to 0.0-1.0 (5 payments = max risk)
+        late_payments_normalized = 0.0
         if customer.total_late_payments:
-            score += min(customer.total_late_payments * 0.05, 0.5)
+            late_payments_normalized = min(customer.total_late_payments / 5.0, 1.0)
 
-        return min(score, 1.0)
+        # Weighted combination
+        score = (max_delay_normalized * 0.6) + (late_payments_normalized * 0.4)
+        return float(min(score, 1.0))
 
     @staticmethod
     def calculate_support_sentiment(customer: Customer) -> float:
@@ -174,8 +193,10 @@ class ChurnFeatureEngineer:
         if not customer.id:
             return 0.0
 
-        # Get average monthly spending from transactions
-        six_months_ago = datetime.utcnow() - timedelta(days=180)
+        # Get average monthly spending from transactions (precise calculation)
+        now = datetime.utcnow()
+        six_months_ago = now - timedelta(days=180)
+
         recent_transactions = db.query(func.sum(Transaction.amount)).filter(
             and_(
                 Transaction.customer_id == customer.id,
@@ -186,7 +207,14 @@ class ChurnFeatureEngineer:
         if not recent_transactions or recent_transactions == 0:
             return 0.0
 
-        monthly_spending = recent_transactions / 6.0
+        # Calculate exact number of days and convert to months (more accurate)
+        days_elapsed = (now - six_months_ago).days
+        if days_elapsed <= 0:
+            days_elapsed = 1  # Avoid division by zero
+
+        months_elapsed = days_elapsed / 30.44  # Average days per month
+        monthly_spending = recent_transactions / months_elapsed
+
         if monthly_spending == 0:
             return 0.0
 
@@ -244,9 +272,13 @@ class ChurnFeatureEngineer:
         if len(transactions) < 2:
             return 0.0
 
-        # Group by month and sum amounts
+        # Group by month and sum amounts (safe NULL handling)
         monthly_spending = {}
         for txn in transactions:
+            # Skip transactions with NULL date or NULL amount
+            if txn.date is None or txn.amount is None:
+                continue
+
             month_key = txn.date.strftime("%Y-%m")
             monthly_spending[month_key] = monthly_spending.get(month_key, 0) + txn.amount
 
@@ -276,7 +308,12 @@ class ChurnFeatureEngineer:
         if len(transactions) < 2:
             return 0.0
 
-        amounts = [t.amount for t in transactions]
+        # Filter out NULL amounts (avoid numpy crash)
+        amounts = [t.amount for t in transactions if t.amount is not None]
+
+        if len(amounts) < 2:
+            return 0.0
+
         mean = np.mean(amounts)
 
         if mean == 0:
@@ -299,14 +336,26 @@ class ChurnFeatureEngineer:
         if len(transactions) == 0:
             return 0.0
 
-        # Count transactions by category
+        # Count transactions by category (skip NULL categories)
         category_counts = {}
         for t in transactions:
             cat = t.mcc_category
+
+            # Skip NULL categories (not a valid category)
+            if cat is None:
+                continue
+
             category_counts[cat] = category_counts.get(cat, 0) + 1
 
+        # If no valid categories, return 0
+        if len(category_counts) == 0:
+            return 0.0
+
         # Calculate Shannon entropy
-        total = len(transactions)
+        total = sum(category_counts.values())  # Count only valid transactions
+        if total == 0:
+            return 0.0
+
         entropy = 0.0
         for count in category_counts.values():
             if count > 0:
@@ -332,6 +381,10 @@ class ChurnFeatureEngineer:
         # Group by month and count
         monthly_counts = {}
         for txn in transactions:
+            # Skip transactions with NULL date (Issue #16 fix)
+            if txn.date is None:
+                continue
+
             month_key = txn.date.strftime("%Y-%m")
             monthly_counts[month_key] = monthly_counts.get(month_key, 0) + 1
 

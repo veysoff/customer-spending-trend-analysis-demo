@@ -35,21 +35,44 @@ class AnomalyDetector:
 
         anomalies = []
 
+        # Calculate adaptive spending spike threshold based on customer volatility
+        # Issue #17 fix: Filter NULL amounts before calculating mean/std
+        amounts = transaction_df["amount"].dropna().values
+        if len(amounts) == 0:
+            return []  # No valid amounts to analyze
+
+        mean_amount = amounts.mean()
+        std_amount = amounts.std()
+
+        # Handle case where mean is NaN (should not happen after dropna, but be safe)
+        if np.isnan(mean_amount) or np.isnan(std_amount):
+            return []
+
+        # Threshold = mean + 2*std (captures ~95% of normal transactions)
+        # Falls back to 3x mean if std is too low (low volatility customers)
+        if std_amount > 0:
+            spike_threshold = mean_amount + (2 * std_amount)
+        else:
+            spike_threshold = mean_amount * 3  # Fallback for low-volatility customers
+
         # Score each transaction against behavioral pattern
         for idx, row in transaction_df.iterrows():
             trans_amount = row["amount"]
             monthly_avg = transaction_df["amount"].mean()
             deviation = abs(trans_amount - monthly_avg) / (monthly_avg + 1)
 
-            # Detect spending spikes
-            if trans_amount > monthly_avg * 3:
+            # Detect spending spikes (adaptive threshold)
+            if trans_amount > spike_threshold:
+                z_score = (trans_amount - mean_amount) / (std_amount + 1e-6)
+                # Issue #17 fix: Check for NULL date before formatting
+                date_str = row["date"].strftime("%Y-%m-%d") if pd.notna(row["date"]) else "Unknown"
                 anomalies.append({
                     "index": idx,
-                    "date": row["date"].strftime("%Y-%m-%d"),
+                    "date": date_str,
                     "type": "SPENDING_SPIKE",
                     "score": min(0.95, 0.5 + deviation * 0.5),
                     "amount": trans_amount,
-                    "reason": f"Amount {trans_amount:.2f} is 3x typical spending"
+                    "reason": f"Amount {trans_amount:.2f} is {z_score:.1f}σ above typical spending"
                 })
 
         # Detect behavioral changes using model
@@ -59,9 +82,12 @@ class AnomalyDetector:
 
             if predictions[0] == -1:  # Anomaly detected
                 anomaly_score = 1 - (scores[0] + 0.5) / 1.5  # Normalize to 0-1
+                # Issue #17 fix: Check for NULL date before formatting
+                last_date = transaction_df.iloc[-1]["date"]
+                date_str = last_date.strftime("%Y-%m-%d") if pd.notna(last_date) else "Unknown"
                 anomalies.append({
                     "index": 0,
-                    "date": transaction_df.iloc[-1]["date"].strftime("%Y-%m-%d"),
+                    "date": date_str,
                     "type": "BEHAVIOR_CHANGE",
                     "score": max(0.0, min(1.0, anomaly_score)),
                     "amount": None,
@@ -84,7 +110,11 @@ class AnomalyDetector:
             spending_volatility = monthly_spending.std()
             trend_slope = np.polyfit(np.arange(len(monthly_spending)),
                                      monthly_spending.values, 1)[0]
-            spending_change = (monthly_spending.iloc[-1] - monthly_spending.iloc[0]) / monthly_spending.iloc[0]
+            # Safe division: avoid ZeroDivisionError if first month = 0
+            if monthly_spending.iloc[0] != 0:
+                spending_change = (monthly_spending.iloc[-1] - monthly_spending.iloc[0]) / monthly_spending.iloc[0]
+            else:
+                spending_change = 0.0  # Cannot compare to zero baseline
         else:
             spending_volatility = 0
             trend_slope = 0

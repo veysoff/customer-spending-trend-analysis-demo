@@ -8,16 +8,23 @@
 
       <div class="mt-6 grid grid-cols-2 gap-4">
         <div>
-          <h3 class="text-sm font-medium text-gray-500">Trend Slope</h3>
+          <h3 class="text-sm font-medium text-gray-500">Trend Slope (Corrected)</h3>
           <p class="text-2xl font-bold mt-1" :class="trendClass">
-            {{ trends.trend_slope.toFixed(2) }} /month
+            {{ (trends.trend_slope_per_month || trends.trend_slope || 0).toFixed(2) }}
+          </p>
+          <p class="text-xs text-gray-500 mt-1">{{ trends.trend_slope_unit || 'AED/month' }}</p>
+          <p class="text-xs text-gray-500">
+            {{ (trends.trend_slope_per_day || 0).toFixed(4) }} AED/day
           </p>
         </div>
         <div>
           <h3 class="text-sm font-medium text-gray-500">Seasonality</h3>
           <p class="text-sm text-gray-600 mt-1">
-            {{ trends.seasonality_pattern }}<br>
-            Amplitude: {{ (trends.seasonality_amplitude * 100).toFixed(0) }}%
+            {{ trends.has_seasonality ? 'Detected' : 'None' }}<br>
+            Amplitude: {{ (trends.seasonality_amplitude * 100).toFixed(1) }}%
+          </p>
+          <p class="text-xs text-gray-500 mt-2">
+            Data span: {{ trends.data_span_days || 0 }} days
           </p>
         </div>
       </div>
@@ -39,8 +46,10 @@ const props = defineProps({
 const chartInstance = ref(null)
 
 const trendClass = computed(() => {
-  if (props.trends.trend_slope > 50) return 'text-green-600'
-  if (props.trends.trend_slope < -50) return 'text-red-600'
+  // Use corrected trend_slope_per_month (or fallback to trend_slope for backward compat)
+  const slope = props.trends.trend_slope_per_month ?? props.trends.trend_slope ?? 0
+  if (slope > 50) return 'text-green-600'
+  if (slope < -50) return 'text-red-600'
   return 'text-gray-600'
 })
 
@@ -66,7 +75,7 @@ const renderChart = () => {
     },
     stroke: {
       curve: 'smooth',
-      width: [2, 1, 1]
+      width: 2
     },
     fill: {
       type: 'gradient',
@@ -110,12 +119,18 @@ const renderChart = () => {
       color: '#f59e0b'
     },
     {
-      name: 'Confidence Interval',
-      data: lowerBounds.map((l, i) => ({
-        x: dates[i],
-        y: [(l + upperBounds[i]) / 2, l, upperBounds[i]]
-      })),
-      color: '#e5e7eb'
+      name: 'Upper Bound (95% CI)',
+      data: upperBounds,
+      color: '#e5e7eb',
+      type: 'line',
+      strokeWidth: 0.5
+    },
+    {
+      name: 'Lower Bound (95% CI)',
+      data: lowerBounds,
+      color: '#e5e7eb',
+      type: 'line',
+      strokeWidth: 0.5
     }
   ]
 

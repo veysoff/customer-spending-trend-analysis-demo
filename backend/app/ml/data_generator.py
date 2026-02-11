@@ -154,7 +154,13 @@ class SyntheticDataGenerator:
                     if month_num > 12:
                         year += (month_num - 1) // 12
                         month_num = ((month_num - 1) % 12) + 1
-                    date_obj = datetime(year, month_num, day, hour, minute)
+
+                    # Handle invalid day for month (e.g., Feb 31st)
+                    import calendar
+                    max_day = calendar.monthrange(year, month_num)[1]
+                    safe_day = min(day, max_day)
+
+                    date_obj = datetime(year, month_num, safe_day, hour, minute)
 
                     records.append({
                         "transaction_id": str(uuid.uuid4()),
