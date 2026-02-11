@@ -408,6 +408,14 @@ Example output:
 }
 ```
 
+## 📚 Documentation
+
+For comprehensive guides and technical details, see:
+- [**QUICKSTART.md**](./documents/guides/QUICKSTART.md) — 5-minute setup guide
+- [**PROJECT_STATUS.md**](./documents/guides/PROJECT_STATUS.md) — Phase completion & deliverables
+- [**ENHANCEMENTS.md**](./documents/guides/ENHANCEMENTS.md) — Recent bug fixes & improvements
+- [**CLAUDE.md**](./CLAUDE.md) — Full project memory & architectural decisions
+
 ## 💡 Future Enhancements
 
 - UC-2: Churn Prediction for Credit Card Holders

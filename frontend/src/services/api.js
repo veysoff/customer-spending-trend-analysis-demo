@@ -82,6 +82,12 @@ export const apiService = {
     return response.data
   },
 
+  // Get AI Insights for a customer
+  async getInsights(customerId) {
+    const response = await api.get(`/api/customers/${customerId}/insights`)
+    return response.data
+  },
+
   // Health check
   async healthCheck() {
     const response = await api.get('/health')

@@ -13,7 +13,7 @@ from .models import (
     GenerateDataRequest, GenerateDataResponse,
     CustomerProfileResponse, TrendResponse, AnomalyResponse, AtRiskResponse,
     ChurnPredictionResponse, BatchChurnPredictionResponse, FeatureImportanceResponse,
-    ModelTrainingResponse
+    ModelTrainingResponse, AIInsightResponse
 )
 from .db import initialize_database, get_db, CustomerRepository, TransactionRepository
 from .db.models import Customer, Transaction
@@ -22,6 +22,7 @@ from .ml.feature_engineering import FeatureEngineer
 from .ml.trend_detection import TrendDetector
 from .ml.anomaly_detection import AnomalyDetector
 from .ml.explainability import ExplainabilityEngine
+from .ml.narrative_engine import NarrativeEngine, NarrativeCache
 
 # Configure logging
 logging.basicConfig(level=config.LOG_LEVEL)
@@ -208,9 +209,6 @@ async def get_customer_profile(
     # Detect behavior change
     behavior_change = _detect_behavior_change(customer_df)
 
-    # Calculate churn risk (with behavior change as a signal)
-    churn_risk = _calculate_churn_risk(trend_slope, features, behavior_change)
-
     # Build persona metadata if available
     persona_metadata = None
     if customer.persona_name and customer.expected_risk_score:
@@ -221,9 +219,6 @@ async def get_customer_profile(
             narrative=customer.narrative,
             expected_risk_score=customer.expected_risk_score
         )
-        # Blend calculated risk with expected risk from persona (60% expected, 40% calculated)
-        # This ensures personas' designed risk patterns are reflected in the output
-        churn_risk = (0.6 * customer.expected_risk_score) + (0.4 * churn_risk)
 
     return CustomerProfileResponse(
         customer_id=customer_id,
@@ -234,9 +229,7 @@ async def get_customer_profile(
         ],
         current_monthly_spending=features["current_monthly_spending"],
         spending_trend=trend_category,
-        churn_risk=churn_risk,
         behavior_change=behavior_change,
-        risk_category=_get_risk_category(churn_risk),
         persona=persona_metadata,
     )
 
@@ -374,7 +367,7 @@ async def get_customer_anomalies(customer_id: str, db: Session = Depends(get_db)
 
 @app.get("/api/customers/risk/high", response_model=AtRiskResponse)
 async def get_high_risk_customers(db: Session = Depends(get_db)) -> AtRiskResponse:
-    """Get list of high-risk customers."""
+    """Get list of high-risk customers using cached churn risk scores."""
     repo = CustomerRepository(db)
     customers = repo.get_all(limit=None)  # Get all customers
 
@@ -385,46 +378,19 @@ async def get_high_risk_customers(db: Session = Depends(get_db)) -> AtRiskRespon
     churn_risks = []
 
     for customer in customers:
-        _, transactions = repo.get_customer_with_transactions(customer.id)
-        if not transactions:
-            continue
+        # Use cached churn_risk_score from database if available
+        if customer.churn_risk_score is not None:
+            churn_risk = customer.churn_risk_score
+            churn_risks.append(churn_risk)
 
-        # Convert to DataFrame
-        customer_df = pd.DataFrame([{
-            'customer_id': t.customer_id,
-            'date': t.date,
-            'amount': t.amount,
-            'mcc': t.mcc,
-            'mcc_category': t.mcc_category,
-            'channel': t.channel,
-            'merchant': t.merchant,
-            'country': t.country,
-            'time_of_day': t.time_of_day
-        } for t in transactions]).sort_values("date")
-
-        feature_engineer = FeatureEngineer()
-        features = feature_engineer.engineer_features(customer_df)
-
-        trend_detector = TrendDetector()
-        trend_result = trend_detector.detect_trend(customer_df)
-
-        behavior_change = _detect_behavior_change(customer_df)
-        churn_risk = _calculate_churn_risk(trend_result["trend_slope"], features, behavior_change)
-
-        # Blend with expected risk if persona is available
-        if customer.expected_risk_score:
-            churn_risk = (0.6 * customer.expected_risk_score) + (0.4 * churn_risk)
-
-        churn_risks.append(churn_risk)
-
-        if churn_risk >= 0.6:  # High risk threshold
-            at_risk.append({
-                "customer_id": customer.id,
-                "churn_risk": churn_risk,
-                "risk_category": _get_risk_category(churn_risk),
-                "primary_signal": _get_primary_signal(trend_result["trend_slope"], features),
-                "recommended_action": _get_recommended_action(churn_risk)
-            })
+            if churn_risk >= 0.6:  # High risk threshold
+                at_risk.append({
+                    "customer_id": customer.id,
+                    "churn_risk": churn_risk,
+                    "risk_category": customer.risk_category or _get_risk_category(churn_risk),
+                    "primary_signal": customer.primary_signal or "Activity pattern anomaly detected",
+                    "recommended_action": customer.recommended_action or _get_recommended_action(churn_risk)
+                })
 
     # Sort by churn_risk
     at_risk.sort(key=lambda x: x["churn_risk"], reverse=True)
@@ -459,54 +425,6 @@ def _transactions_to_dataframe(transactions: List[Transaction]) -> pd.DataFrame:
     df = pd.DataFrame(data)
     df['date'] = pd.to_datetime(df['date'])
     return df
-
-
-def _calculate_churn_risk(trend_slope: float, features: dict, behavior_change: str = None) -> float:
-    """Calculate churn risk score based on multiple signals."""
-    risk = 0.0
-
-    # Trend component - strong negative slope indicates decline
-    if trend_slope < -100:
-        risk += 0.4
-    elif trend_slope < -50:
-        risk += 0.2
-
-    # Volatility component - high spending volatility (>1000) indicates instability
-    spending_volatility = features.get("spending_volatility", [0])[-1] if isinstance(features.get("spending_volatility"), list) else features.get("spending_volatility", 0)
-    if spending_volatility > 1000:
-        risk += 0.2
-
-    # Frequency component - fewer transactions (<10/month) may indicate disengagement
-    current_trans_count = features.get("current_trans_count", 0)
-    if isinstance(current_trans_count, list):
-        current_trans_count = current_trans_count[-1] if current_trans_count else 0
-    if current_trans_count < 10:
-        risk += 0.15
-
-    # Category diversity - concentration in 1-2 categories (subsistence) indicates churn
-    unique_categories = features.get("unique_categories", [0])[-1] if isinstance(features.get("unique_categories"), list) else features.get("unique_categories", 0)
-    if unique_categories < 2:
-        risk += 0.25  # High weight on category shift to subsistence
-
-    # Behavior change signal - significant category shifts are strong churn indicators
-    if behavior_change and "Lifestyle Shift" in behavior_change:
-        risk += 0.25  # Strong signal of behavioral change
-    elif behavior_change:
-        risk += 0.1
-
-    return min(1.0, risk)
-
-
-def _get_risk_category(churn_risk: float) -> str:
-    """Categorize risk level."""
-    if churn_risk >= 0.8:
-        return "CRITICAL"
-    elif churn_risk >= 0.6:
-        return "HIGH"
-    elif churn_risk >= 0.4:
-        return "MEDIUM"
-    else:
-        return "LOW"
 
 
 def _detect_behavior_change(customer_df: pd.DataFrame) -> str:
@@ -891,6 +809,152 @@ async def predict_all_customers_churn(
         raise HTTPException(
             status_code=500,
             detail="Batch prediction failed"
+        )
+
+
+@app.get("/api/customers/{customer_id}/insights", response_model=AIInsightResponse)
+async def get_customer_insights(
+    customer_id: str, db: Session = Depends(get_db)
+) -> AIInsightResponse:
+    """Get AI-generated insight narrative for customer.
+
+    This endpoint:
+    1. Loads cached narrative if available (7-day TTL)
+    2. Otherwise, engineers 15 features for the customer
+    3. Generates professional analyst briefing (Summary → Findings → Advice → Evidence)
+    4. Connects UC-1 trends + UC-2 churn prediction into business narrative
+    5. Caches result in ai_interpretations table
+
+    Response includes:
+    - Summary: HEALTHY / MEDIUM / WARNING / CRITICAL
+    - Key Findings: 3-4 business insights from features + SHAP
+    - Business Advice: Actionable recommendation with urgency level
+    - Technical Evidence: Hidden JSON with formulas + confidence
+
+    Performance: <100ms (first call with cache miss), <1ms (cache hit)
+    """
+    from .ml.churn_features import ChurnFeatureEngineer
+    import json
+
+    logger.info("Getting AI insights for customer: %s", customer_id)
+
+    try:
+        # Check if customer exists
+        repo = CustomerRepository(db)
+        customer = repo.get_by_id(customer_id)
+        if not customer:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Customer {customer_id} not found"
+            )
+
+        # Try to get cached narrative
+        cached = NarrativeCache.get_cached_narrative(customer_id, db)
+        if cached:
+            logger.info("Returning cached narrative for customer: %s", customer_id)
+            return AIInsightResponse(
+                customer_id=customer_id,
+                summary=cached["summary"],
+                summary_icon=cached.get("summary_icon", ""),
+                risk_category=cached.get("risk_category", ""),
+                key_findings=json.loads(cached["key_findings"]) if isinstance(cached["key_findings"], str) else cached["key_findings"],
+                business_advice=cached["business_advice"],
+                technical_evidence=json.loads(cached["technical_evidence"]) if isinstance(cached["technical_evidence"], str) else cached["technical_evidence"],
+                generated_at=cached["generated_at"],
+                confidence_score=cached["confidence_score"],
+                cached=True
+            )
+
+        # Load cached churn model
+        cached_models = load_cached_models()
+        model = cached_models.get("churn_model")
+        scaler = cached_models.get("feature_scaler")
+
+        if not model or not scaler:
+            raise HTTPException(
+                status_code=503,
+                detail="Churn model not trained yet. Please train the model first."
+            )
+
+        # Engineer features for customer
+        features_dict = ChurnFeatureEngineer.engineer_churn_features(customer_id, db)
+        feature_names = list(features_dict.keys())
+        feature_values = [features_dict[name] for name in feature_names]
+
+        # Scale features and get prediction
+        X = pd.DataFrame([feature_values], columns=feature_names)
+        X_scaled = scaler.transform(X)
+        prediction = model.predict(X_scaled)[0]
+        probability = model.predict_proba(X_scaled)[0]
+        churn_probability = float(probability[1])
+
+        # Get SHAP values
+        shap_values_dict = {}
+        try:
+            import shap
+            import numpy as np
+
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(X_scaled)
+
+            if isinstance(shap_values, list):
+                shap_vals = shap_values[1]  # Class 1 (churn)
+            else:
+                shap_vals = shap_values
+
+            # Handle NaN values and convert to float
+            shap_values_dict = {}
+            for i in range(len(feature_names)):
+                val = float(shap_vals[0][i])
+                # Replace NaN with 0 (no contribution)
+                if np.isnan(val):
+                    val = 0.0
+                shap_values_dict[feature_names[i]] = val
+        except Exception as e:
+            logger.warning("Failed to generate SHAP values: %s", str(e))
+
+        # Add churn probability to features for narrative
+        features_with_prob = {**features_dict, "churn_probability": churn_probability}
+
+        # Generate narrative
+        narrative = NarrativeEngine.generate_narrative(
+            customer_id=customer_id,
+            features=features_with_prob,
+            churn_probability=churn_probability,
+            shap_values=shap_values_dict if shap_values_dict else None
+        )
+
+        # Cache the narrative
+        NarrativeCache.save_narrative(customer_id, narrative, db)
+
+        logger.info(
+            "Generated narrative for customer %s: summary=%s, confidence=%.2f",
+            customer_id,
+            narrative["summary"],
+            narrative["confidence_score"]
+        )
+
+        # Build response
+        return AIInsightResponse(
+            customer_id=customer_id,
+            summary=narrative["summary"],
+            summary_icon=narrative.get("summary_icon", ""),
+            risk_category=narrative.get("risk_category", ""),
+            key_findings=narrative["key_findings"],
+            business_advice=narrative["business_advice"],
+            technical_evidence=narrative["technical_evidence"],
+            generated_at=narrative["generated_at"],
+            confidence_score=narrative["confidence_score"],
+            cached=False
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error generating AI insights: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate AI insights"
         )
 
 

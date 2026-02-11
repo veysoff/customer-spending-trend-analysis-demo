@@ -53,6 +53,9 @@ class Customer(Base):
     # Computed Fields
     days_since_last_transaction = Column(Integer, nullable=True)
     churn_risk_score = Column(Float, nullable=True)
+    risk_category = Column(String(50), nullable=True)  # STABLE, MEDIUM, HIGH, CRITICAL
+    primary_signal = Column(String(255), nullable=True)  # Main churn indicator
+    recommended_action = Column(String(255), nullable=True)  # Suggested action
     churn_prediction_timestamp = Column(DateTime(timezone=True), nullable=True)
 
     # Relationship for eager loading
@@ -113,3 +116,23 @@ class CustomerRiskProfile(Base):
 
     def __repr__(self):
         return f"<CustomerRiskProfile(customer_id={self.customer_id}, risk={self.risk_category})>"
+
+
+class AIInterpretation(Base):
+    """Cached AI-generated narratives for customers (Phase 5E)."""
+
+    __tablename__ = "ai_interpretations"
+
+    customer_id = Column(String(50), ForeignKey("customers.id"), primary_key=True, index=True)
+    summary = Column(String(20), nullable=False)  # HEALTHY, MEDIUM, WARNING, CRITICAL
+    summary_icon = Column(String(10), nullable=True)  # Emoji icon (🟢 🟡 🔴)
+    risk_category = Column(String(50), nullable=True)  # Risk category name
+    key_findings = Column(String(2000), nullable=True)  # JSON array
+    business_advice = Column(String(1000), nullable=True)
+    technical_evidence = Column(String(2000), nullable=True)  # JSON
+    confidence_score = Column(Float, default=0.0)
+    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # Cache TTL
+
+    def __repr__(self):
+        return f"<AIInterpretation(customer_id={self.customer_id}, summary={self.summary})>"

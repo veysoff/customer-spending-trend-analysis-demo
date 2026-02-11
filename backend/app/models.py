@@ -77,9 +77,7 @@ class CustomerProfileResponse(BaseModel):
     date_range: List[str]
     current_monthly_spending: float
     spending_trend: str
-    churn_risk: float
     behavior_change: Optional[str]
-    risk_category: str
     persona: Optional[PersonaMetadata] = None
 
 
@@ -165,3 +163,21 @@ class ModelTrainingResponse(BaseModel):
     model_metrics: Dict[str, float]
     training_timestamp: str
     customers_trained: int
+
+
+# ============================================================================
+# Phase 5E: AI Insights Narrative Panel Response Models
+# ============================================================================
+
+class AIInsightResponse(BaseModel):
+    """Response for AI-generated insight narrative for customer."""
+    customer_id: str
+    summary: str  # "HEALTHY", "MEDIUM", "WARNING", "CRITICAL"
+    summary_icon: str  # "✅", "🟡", "⚠️", "🔴"
+    risk_category: str  # Detailed classification (STABLE, MONITORING, AT_RISK, ACTIVE_DECLINE, SILENT_CHURN, ACTIVE_CHURN)
+    key_findings: List[str]  # 3-4 professional findings
+    business_advice: str  # Actionable recommendation
+    technical_evidence: Dict  # Hidden detail block with metrics/formulas
+    generated_at: str  # ISO timestamp
+    confidence_score: float  # 0.0-1.0
+    cached: Optional[bool] = False  # True if loaded from cache

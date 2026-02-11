@@ -81,7 +81,7 @@ const renderChart = () => {
     },
     yaxis: {
       title: {
-        text: 'Spending (£)'
+        text: 'Spending (AED)'
       }
     },
     legend: {
@@ -93,7 +93,7 @@ const renderChart = () => {
         format: 'MMM dd, yyyy'
       },
       y: {
-        formatter: (val) => val ? '£' + val.toFixed(2) : 'N/A'
+        formatter: (val) => val ? 'AED ' + val.toFixed(2) : 'N/A'
       }
     }
   }
