@@ -1075,3 +1075,11 @@ async def get_feature_importance(db: Session = Depends(get_db)) -> FeatureImport
             status_code=500,
             detail="Failed to retrieve feature importance"
         )
+
+
+# ============================================================================
+# UC-4: COMPREHENSIVE ANALYTICS (Monthly Analysis - Unified View)
+# ============================================================================
+
+
+

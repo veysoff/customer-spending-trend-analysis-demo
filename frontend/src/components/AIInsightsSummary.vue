@@ -15,9 +15,15 @@
         </div>
       </div>
 
-      <!-- Error State -->
+      <!-- Error State with Retry -->
       <div v-else-if="error" class="p-4 bg-red-50 border border-red-200 rounded-lg">
-        <p class="text-red-800 text-sm">{{ error }}</p>
+        <p class="text-red-800 text-sm mb-3">{{ error }}</p>
+        <button
+          @click="loadInsights"
+          class="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+        >
+          🔄 Retry
+        </button>
       </div>
 
       <!-- Summary Content -->

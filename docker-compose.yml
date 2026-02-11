@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Backend API Service
   backend:
@@ -44,10 +42,11 @@ services:
     networks:
       - ml-poc-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost/ 2>/dev/null || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost/"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
 networks:
   ml-poc-network:

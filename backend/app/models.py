@@ -181,3 +181,68 @@ class AIInsightResponse(BaseModel):
     generated_at: str  # ISO timestamp
     confidence_score: float  # 0.0-1.0
     cached: Optional[bool] = False  # True if loaded from cache
+
+
+# ============================================================================
+# UC-4: Comprehensive Analytics (Monthly Analysis)
+# ============================================================================
+
+class ComprehensiveAnalyticsResponse(BaseModel):
+    """Unified response combining UC-1 trends + UC-2 churn + business actions for monthly review."""
+    customer_id: str
+    period: str  # "2024-01" (monthly) or custom date range
+
+    # UC-1: Spending Trends
+    spending_analysis: Dict  # {trend_slope, volatility, category_diversity, monthly_avg}
+    behavior_changes: Optional[List[str]] = None  # ["Category shift detected", "Frequency decline"]
+
+    # UC-2: Churn Prediction
+    churn_probability: float  # 0.0-1.0
+    churn_prediction: str  # "stable", "at_risk", "churned"
+    risk_drivers: List[Dict]  # Top 5 SHAP factors
+
+    # Professional Narrative
+    ai_insights: str  # Summary narrative
+    recommended_actions: List[str]  # ["Retention outreach", "Loyalty upgrade"]
+
+    # Metrics
+    account_health: Dict  # {utilization, dormancy, engagement, payment_behavior}
+    generated_at: str
+    confidence_score: float
+
+
+class ModelPerformanceResponse(BaseModel):
+    """Model evaluation metrics for transparency and audit."""
+    model_type: str  # "XGBoost Binary Classifier"
+    training_samples: int
+    test_samples: int
+
+    # Classification metrics
+    accuracy: float
+    precision: float
+    recall: float
+    f1_score: float
+    roc_auc: float
+
+    # Confusion matrix
+    true_negatives: int
+    false_positives: int
+    false_negatives: int
+    true_positives: int
+
+    # Feature count
+    total_features: int
+    feature_list: List[str]
+
+    # Model info
+    last_trained: str  # ISO timestamp
+    model_version: str
+    threshold: float  # Default decision threshold
+
+
+class ModelVersionResponse(BaseModel):
+    """Available model versions for deployment."""
+    current_version: str  # "1.0.0"
+    available_versions: List[Dict]  # [{"version": "1.0.0", "trained_at": "...", "f1_score": 0.82}]
+    training_status: str  # "idle", "training", "evaluating"
+    last_retraining: Optional[str] = None
