@@ -10,6 +10,8 @@ services:
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
       - MODEL_PATH=/app/ml/models
+      - TRAINING_N_CUSTOMERS=1000
+      - DEMO_N_CUSTOMERS=10
     volumes:
       - ./backend/data:/app/data
       - ./backend/app/ml/models:/app/ml/models
@@ -18,10 +20,10 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --access-log
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 900s
     restart: unless-stopped
     logging:
       driver: "json-file"

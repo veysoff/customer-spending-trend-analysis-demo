@@ -29,16 +29,14 @@ ISOLATION_FOREST_N_ESTIMATORS = 100
 ISOLATION_FOREST_RANDOM_STATE = 42
 
 # Data Generation Configuration (customize via environment variables)
-# Demo mode: 40 named personas + 10 background = 50 total (fast for demonstrations)
-# Default: Set to demo mode for better user experience in development
-N_CUSTOMERS = int(os.getenv("N_CUSTOMERS", "50"))  # Default: demo mode (40 personas + 10 background)
+N_CUSTOMERS = int(os.getenv("N_CUSTOMERS", "50"))  # Legacy fallback (use TRAINING_N_CUSTOMERS instead)
 N_MONTHS = int(os.getenv("N_MONTHS", "12"))        # Set via N_MONTHS env var
 BASE_MONTHLY_SPENDING = 5000.0
 SPENDING_VARIANCE = 500.0
 
-# Configuration notes:
-# Default (demo): N_CUSTOMERS=50 → 40 named personas + 10 background (complete demo suite)
-# For testing: export N_CUSTOMERS=100 → 40 personas + 60 background
-# For production: export N_CUSTOMERS=1000 → 40 personas + 960 background
-# Larger dataset: export N_CUSTOMERS=5000+ as needed
-# Personas include: stable, at-risk, anomalies, growth, travelers, crypto traders, gamblers, etc.
+# Training vs Demo Configuration:
+# On first startup: generate TRAINING_N_CUSTOMERS for model training, then prune to DEMO_N_CUSTOMERS
+# TRAINING_N_CUSTOMERS=1000 → full dataset for quality ML model
+# DEMO_N_CUSTOMERS=10 → background customers kept after pruning (+ all 40 personas)
+TRAINING_N_CUSTOMERS: int = int(os.getenv("TRAINING_N_CUSTOMERS", "1000"))
+DEMO_N_CUSTOMERS: int = int(os.getenv("DEMO_N_CUSTOMERS", "10"))

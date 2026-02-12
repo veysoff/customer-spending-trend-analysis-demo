@@ -347,6 +347,27 @@ class ChurnModelTrainer:
                 'error': str(e),
             }
 
+    def train_and_save(self, db: Session = None) -> Dict[str, float]:
+        """Train model on current DB contents and save to disk.
+
+        Convenience method for init_db.py to call during startup.
+
+        Args:
+            db: Optional database session (uses self.db if not provided)
+
+        Returns:
+            Dictionary with f1, precision, recall, roc_auc metrics
+        """
+        if db is not None:
+            self.db = db
+
+        result = self.train_full_pipeline()
+
+        if not result['success']:
+            raise RuntimeError(f"Model training failed: {result.get('error', 'unknown error')}")
+
+        return result['metrics']
+
     def get_feature_importance(self) -> pd.DataFrame:
         """Get feature importance from trained model.
 

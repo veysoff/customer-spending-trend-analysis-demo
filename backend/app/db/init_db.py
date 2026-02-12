@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from sqlalchemy.orm import Session
 from .database import SessionLocal, create_tables
 from .models import Customer, Transaction
@@ -18,9 +19,15 @@ def initialize_database():
 
     Safe to call multiple times - checks if data exists before generating.
 
-    Generation order:
+    First-run generation order (~10-12 minutes):
     1. Generate 40 named demo personas (with diverse patterns & edge cases)
-    2. Generate remaining background customers (config.N_CUSTOMERS - 40)
+    2. Generate TRAINING_N_CUSTOMERS (1000) background customers for ML training
+    3. Train XGBoost churn model on full dataset
+    4. Prune DB: keep 40 personas + DEMO_N_CUSTOMERS (10) best background customers
+
+    Subsequent runs (<1 second):
+    - DB already has customers → skip generation
+    - Model .pkl already exists → skip training
     """
     # Create all tables
     logger.info("Creating database tables...")
@@ -33,19 +40,31 @@ def initialize_database():
         total_customers = db.query(Customer).count()
 
         if total_customers == 0:
-            logger.info("No customers found. Generating demo personas and synthetic data...")
+            logger.info("No customers found. Starting full initialization...")
+            logger.info(f"This will take ~10-12 minutes on first run.")
 
-            # 1. Generate 40 demo personas first (named, with specific patterns)
-            logger.info("Step 1: Generating 40 named demo personas...")
+            # Step 1: Generate 40 demo personas first (named, with specific patterns)
+            logger.info("Step 1/4: Generating 40 named demo personas...")
             _generate_demo_personas(db)
 
-            # 2. Generate background customers
-            logger.info("Step 2: Generating background customers...")
-            _generate_synthetic_data_with_churn(db, background_only=True)
+            # Step 2: Generate 1000 background customers for model training
+            logger.info(f"Step 2/4: Generating {config.TRAINING_N_CUSTOMERS} background customers for training...")
+            _generate_synthetic_data_with_churn(db, n_customers=config.TRAINING_N_CUSTOMERS)
 
-            logger.info("Data generation complete")
+            # Step 3: Train XGBoost churn model on all data
+            logger.info("Step 3/4: Training XGBoost churn model...")
+            _train_churn_model(db)
+
+            # Step 4: Prune to demo set (keep 10 background customers)
+            logger.info(f"Step 4/4: Pruning to demo set (keeping {config.DEMO_N_CUSTOMERS} background customers)...")
+            _prune_to_demo_set(db, keep_count=config.DEMO_N_CUSTOMERS)
+
+            final_count = db.query(Customer).count()
+            logger.info(f"✅ Initialization complete. DB has {final_count} customers.")
         else:
             logger.info(f"Database has {total_customers} customers. Skipping generation.")
+            # Ensure model exists even if DB was pre-populated
+            _ensure_model_trained(db)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -141,15 +160,13 @@ def _generate_demo_personas(db: Session):
     )
 
 
-def _generate_synthetic_data_with_churn(db: Session, background_only: bool = False):
+def _generate_synthetic_data_with_churn(db: Session, n_customers: int = None, background_only: bool = False):
     """Generate synthetic customers with churn patterns and credit metrics.
-
-    Uses config values: N_CUSTOMERS, N_MONTHS (default: 1000, 12)
 
     Args:
         db: Database session
-        background_only: If True, generates (N_CUSTOMERS - 30) background customers.
-                        If False, generates all N_CUSTOMERS.
+        n_customers: Number of customers to generate. Defaults to config.TRAINING_N_CUSTOMERS.
+        background_only: Legacy parameter (ignored when n_customers is provided).
 
     Distribution:
     - 40% stable (no churn)
@@ -157,13 +174,16 @@ def _generate_synthetic_data_with_churn(db: Session, background_only: bool = Fal
     - 20% at_risk (no churn but warning signs)
     - 10% churned (long-term inactive)
     """
-    n_to_generate = config.N_CUSTOMERS
-    if background_only:
-        # Reserve 30 slots for demo personas
-        n_to_generate = max(0, config.N_CUSTOMERS - 30)
+    if n_customers is None:
+        # Legacy fallback
+        n_to_generate = config.N_CUSTOMERS
+        if background_only:
+            n_to_generate = max(0, config.N_CUSTOMERS - 30)
+    else:
+        n_to_generate = n_customers
 
     if n_to_generate <= 0:
-        logger.info("No background customers to generate (all slots reserved for demo personas)")
+        logger.info("No background customers to generate")
         return
 
     logger.info(
@@ -193,6 +213,125 @@ def _generate_synthetic_data_with_churn(db: Session, background_only: bool = Fal
         logger.info(f"   - Current balance: {sample.current_balance}")
         logger.info(f"   - Is churned: {sample.is_churned}")
         logger.info(f"   - Support tickets: {sample.support_tickets_count}")
+
+
+def _train_churn_model(db: Session):
+    """Train XGBoost churn model on all current DB customers, save to disk.
+
+    Skipped if model .pkl already exists (idempotent).
+    """
+    from ..ml.churn_model import ChurnModelTrainer
+
+    model_path = Path(__file__).parent.parent / "ml" / "models" / "churn_model.pkl"
+
+    if model_path.exists():
+        logger.info(f"Churn model already exists at {model_path} — skipping training")
+        return
+
+    logger.info("Training XGBoost churn model on full dataset...")
+    trainer = ChurnModelTrainer(db)
+    try:
+        metrics = trainer.train_and_save(db)
+        logger.info(
+            f"✅ Model training complete: F1={metrics['f1']:.3f}, "
+            f"AUC={metrics['roc_auc']:.3f}, Recall={metrics['recall']:.3f}"
+        )
+    except Exception as e:
+        logger.error(f"Model training failed: {e}")
+        raise
+
+
+def _ensure_model_trained(db: Session):
+    """Ensure churn model exists; train if missing (for pre-populated DBs)."""
+    model_path = Path(__file__).parent.parent / "ml" / "models" / "churn_model.pkl"
+
+    if not model_path.exists():
+        logger.info("Churn model missing. Training on existing DB data...")
+        _train_churn_model(db)
+    else:
+        logger.info("Churn model already exists. No training needed.")
+
+
+def _prune_to_demo_set(db: Session, keep_count: int = 10):
+    """Prune background customers to keep only the best demo-representative ones.
+
+    Keeps all persona_* customers intact. Selects the best background customers
+    per pattern to cover the full churn risk gradient.
+
+    Selection strategy (deterministic, seed=42 in data generator):
+    - 3 normal (stable, 0-10% risk)
+    - 3 silent_churn (high risk, 90-99%)
+    - 3 at_risk (medium risk, 40-80%)
+    - 1 lifestyle_shift (churn type variety)
+
+    Args:
+        db: Database session
+        keep_count: Total background customers to keep (default 10)
+    """
+    # Get all background customers (not personas)
+    all_background = db.query(Customer).filter(
+        ~Customer.id.like("persona_%")
+    ).all()
+
+    total_background = len(all_background)
+    logger.info(f"Found {total_background} background customers. Selecting {keep_count} to keep...")
+
+    # Allocate slots per pattern
+    patterns_allocation = {
+        "normal": 3,
+        "silent_churn": 3,
+        "at_risk": 3,
+        "lifestyle_shift": 1,
+    }
+
+    # Adjust if keep_count differs from default 10
+    if keep_count != 10:
+        per_pattern = keep_count // 4
+        remainder = keep_count % 4
+        patterns_allocation = {
+            "normal": per_pattern + (1 if remainder > 0 else 0),
+            "silent_churn": per_pattern + (1 if remainder > 1 else 0),
+            "at_risk": per_pattern + (1 if remainder > 2 else 0),
+            "lifestyle_shift": per_pattern,
+        }
+
+    to_keep_ids = set()
+    for pattern, count in patterns_allocation.items():
+        matching = [c for c in all_background if c.pattern == pattern]
+        selected = matching[:count]
+        for c in selected:
+            to_keep_ids.add(c.id)
+        logger.info(f"  Pattern '{pattern}': found {len(matching)}, keeping {len(selected)}")
+
+    # Delete all background customers not in keep list
+    to_delete = [c for c in all_background if c.id not in to_keep_ids]
+    deleted_customers = 0
+    deleted_transactions = 0
+
+    logger.info(f"Deleting {len(to_delete)} background customers and their transactions...")
+
+    for customer in to_delete:
+        tx_count = db.query(Transaction).filter(
+            Transaction.customer_id == customer.id
+        ).delete(synchronize_session=False)
+        deleted_transactions += tx_count
+        db.delete(customer)
+        deleted_customers += 1
+
+        if deleted_customers % 100 == 0:
+            db.commit()
+            logger.info(f"  Pruned {deleted_customers}/{len(to_delete)} customers...")
+
+    db.commit()
+
+    kept_count = len(to_keep_ids)
+    persona_count = db.query(Customer).filter(Customer.id.like("persona_%")).count()
+    logger.info(
+        f"✅ Pruning complete: deleted {deleted_customers} customers "
+        f"({deleted_transactions} transactions). "
+        f"Kept {kept_count} background + {persona_count} personas = "
+        f"{kept_count + persona_count} total."
+    )
 
 
 def _generate_personas(db: Session):

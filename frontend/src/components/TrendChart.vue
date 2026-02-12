@@ -60,10 +60,31 @@ const renderChart = () => {
     return dateStr
   })
 
-  const actuals = props.trends.trend_data.map(d => d.actual || null)
-  const forecasts = props.trends.trend_data.map(d => d.forecast || 0)
-  const lowerBounds = props.trends.trend_data.map(d => d.lower_bound || 0)
-  const upperBounds = props.trends.trend_data.map(d => d.upper_bound || 0)
+  const actuals = props.trends.trend_data.map(d => d.actual ?? null)
+
+  // Find the boundary index where historical data ends and forecast begins
+  const boundaryIdx = props.trends.trend_data.findIndex(d => d.actual === null || d.actual === undefined)
+
+  // Forecast line: null during historical period, yhat only from boundary onwards.
+  // Include the last actual point as the anchor so the line connects smoothly.
+  // This prevents the flat Prophet baseline from cluttering the historical view.
+  const lastActualVal = boundaryIdx > 0 ? (actuals[boundaryIdx - 1] ?? null) : null
+  const forecasts = props.trends.trend_data.map((d, i) => {
+    if (boundaryIdx === -1) return null        // no forecast data at all
+    if (i < boundaryIdx - 1) return null       // hide forecast during history (except last actual)
+    if (i === boundaryIdx - 1) return lastActualVal  // anchor: last actual value
+    return d.forecast ?? null
+  })
+
+  // Confidence bands: same approach — only show in forecast window
+  const lowerBounds = props.trends.trend_data.map((d, i) => {
+    if (boundaryIdx === -1 || i < boundaryIdx) return null
+    return d.lower_bound ?? null
+  })
+  const upperBounds = props.trends.trend_data.map((d, i) => {
+    if (boundaryIdx === -1 || i < boundaryIdx) return null
+    return d.upper_bound ?? null
+  })
 
   // FIX #5: Detect anomalies
   const anomalies = detectAnomalies(actuals, forecasts)

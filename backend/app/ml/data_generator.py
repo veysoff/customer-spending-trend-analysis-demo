@@ -48,12 +48,21 @@ class SyntheticDataGenerator:
         self.start_date = datetime(start_year, start_month, 1)
 
     def _get_pattern_type(self, customer_idx: int) -> str:
-        """Assign behavior pattern to customer."""
+        """Assign behavior pattern to customer.
+
+        Distribution:
+        - 0-39%:  normal          (stable active)
+        - 40-69%: silent_churn    (gradual decline → churned)
+        - 70-89%: at_risk         (declining frequency, warming signals)
+        - 90-99%: lifestyle_shift (category change, still active)
+        """
         ratio = customer_idx / self.n_customers
         if ratio < 0.40:
             return "normal"
         elif ratio < 0.70:
             return "silent_churn"
+        elif ratio < 0.90:
+            return "at_risk"
         else:
             return "lifestyle_shift"
 
@@ -77,6 +86,12 @@ class SyntheticDataGenerator:
                 decline_factor = (0.9 ** (month - 3))
                 return seasonal * decline_factor
             return seasonal
+        elif pattern == "at_risk":
+            # Mild decline: 4% per month starting month 5 — borderline behaviour
+            if month >= 5:
+                decline_factor = (0.96 ** (month - 4))
+                return seasonal * decline_factor
+            return seasonal
         else:  # lifestyle_shift
             return seasonal
 
@@ -86,11 +101,25 @@ class SyntheticDataGenerator:
         transactions = []
         days_in_month = 28 if month == 2 else 30 if month in [4, 6, 9, 11] else 31
 
-        # Transaction frequency varies
+        # Transaction frequency varies by pattern
         if pattern == "silent_churn":
-            n_transactions = max(int(self.rng.normal(25, 5)), 10)
+            # Sharply declining frequency — nearly dormant by end
+            if month >= 7:
+                n_transactions = max(int(self.rng.normal(10, 3)), 3)
+            elif month >= 4:
+                n_transactions = max(int(self.rng.normal(20, 4)), 8)
+            else:
+                n_transactions = max(int(self.rng.normal(28, 4)), 10)
+        elif pattern == "at_risk":
+            # Gradually declining frequency — still active but slowing
+            if month >= 8:
+                n_transactions = max(int(self.rng.normal(18, 4)), 8)
+            elif month >= 5:
+                n_transactions = max(int(self.rng.normal(23, 4)), 10)
+            else:
+                n_transactions = max(int(self.rng.normal(28, 4)), 12)
         else:
-            n_transactions = int(self.rng.normal(30, 5))
+            n_transactions = max(int(self.rng.normal(30, 5)), 10)
 
         for _ in range(n_transactions):
             day = self.rng.integers(1, days_in_month + 1)
@@ -220,18 +249,21 @@ class SyntheticDataGenerator:
                 "total_late_payments": int(self.rng.integers(1, 5)),
             }
         elif churn_pattern == "at_risk":
-            credit_limit = float(self.rng.uniform(10000, 30000))
+            # Borderline customers: not churned yet but showing clear warning signals.
+            # Model should score them 40-70%: elevated utilisation, some payment delays,
+            # medium complaint severity, low-but-not-zero campaign engagement.
+            credit_limit = float(self.rng.uniform(8000, 20000))
             return {
                 "credit_limit": credit_limit,
-                "current_balance": float(self.rng.uniform(0.35, 0.65) * credit_limit),  # 35-65% utilization
-                "annual_income": float(self.rng.uniform(40000, 150000)),
+                "current_balance": float(self.rng.uniform(0.45, 0.75) * credit_limit),  # 45-75% utilization (elevated)
+                "annual_income": float(self.rng.uniform(30000, 90000)),
                 "is_churned": 0,
-                "support_tickets_count": int(self.rng.poisson(3)),
+                "support_tickets_count": int(self.rng.poisson(4)),   # more complaints than stable
                 "complaint_severity": "MEDIUM",
-                "campaigns_opened": int(self.rng.integers(2, 7)),
-                "campaigns_clicked": int(self.rng.integers(0, 3)),
-                "max_payment_delay_days": int(self.rng.integers(5, 15)),
-                "total_late_payments": 0,
+                "campaigns_opened": int(self.rng.integers(1, 4)),    # low engagement
+                "campaigns_clicked": int(self.rng.integers(0, 2)),
+                "max_payment_delay_days": int(self.rng.integers(7, 20)),  # noticeable delays
+                "total_late_payments": int(self.rng.integers(1, 3)),      # some late payments
             }
         else:  # churned (long-term inactive)
             credit_limit = float(self.rng.uniform(3000, 10000))
@@ -251,11 +283,13 @@ class SyntheticDataGenerator:
     def _get_churn_pattern(self, customer_idx: int) -> str:
         """Assign churn pattern to customer based on distribution.
 
-        Distribution:
-        - 40% stable (no churn)
-        - 30% churning (churned)
-        - 20% at_risk (no churn but at risk)
-        - 10% churned (long-term inactive)
+        Mirrors _get_pattern_type so transaction behaviour and credit
+        metrics are consistent for the same customer index:
+
+        - 0-39%:  stable          → normal transactions,   low risk metrics
+        - 40-69%: churning        → silent_churn txns,     high risk metrics (is_churned=1)
+        - 70-89%: at_risk         → at_risk txns,          medium-high metrics (is_churned=0)
+        - 90-99%: churned         → lifestyle_shift txns,  high dormancy metrics (is_churned=1)
         """
         ratio = customer_idx / self.n_customers
         if ratio < 0.40:
