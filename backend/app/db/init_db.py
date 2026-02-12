@@ -85,6 +85,10 @@ def _generate_demo_personas(db: Session):
             transactions = persona.generate_transactions(start_date, end_date)
             total_transactions += len(transactions)
 
+            # is_churned: 1 for at_risk tier (high-risk personas) and high-risk anomalies
+            # Using EXPECTED_RISK_SCORE >= 0.5 as the churn label threshold
+            is_churned = 1 if PersonaClass.EXPECTED_RISK_SCORE >= 0.5 else 0
+
             # Create customer record
             customer = Customer(
                 id=customer_id,
@@ -95,6 +99,7 @@ def _generate_demo_personas(db: Session):
                 persona_seed=1000 + persona_id,
                 narrative=PersonaClass.NARRATIVE,
                 expected_risk_score=PersonaClass.EXPECTED_RISK_SCORE,
+                is_churned=is_churned,
                 generation_timestamp=datetime.utcnow(),
                 first_transaction_date=min(t['date'] for t in transactions) if transactions else None,
                 last_transaction_date=max(t['date'] for t in transactions) if transactions else None,

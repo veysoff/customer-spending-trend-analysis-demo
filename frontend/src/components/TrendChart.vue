@@ -12,7 +12,7 @@
           <p class="text-2xl font-bold mt-1" :class="trendClass">
             {{ (trends.trend_slope_per_month || trends.trend_slope || 0) > 0 ? '+' : '' }}{{ (trends.trend_slope_per_month || trends.trend_slope || 0).toFixed(0) }}
           </p>
-          <p class="text-xs text-gray-500 mt-1">AED/week change per month</p>
+          <p class="text-xs text-gray-500 mt-1">AED/month change</p>
         </div>
         <div>
           <h3 class="text-sm font-medium text-gray-500">Seasonality</h3>
@@ -45,10 +45,9 @@ const props = defineProps({
 const chartInstance = ref(null)
 
 const trendClass = computed(() => {
-  // Use corrected trend_slope_per_month (or fallback to trend_slope for backward compat)
   const slope = props.trends.trend_slope_per_month ?? props.trends.trend_slope ?? 0
-  if (slope > 25) return 'text-green-600'
-  if (slope < -25) return 'text-red-600'
+  if (slope > 100) return 'text-green-600'
+  if (slope < -100) return 'text-red-600'
   return 'text-gray-600'
 })
 
@@ -139,7 +138,7 @@ const renderChart = () => {
       color: '#f59e0b'
     },
     {
-      name: 'Upper Bound (80% CI)',
+      name: 'Upper Bound (95% CI)',
       data: upperBounds.map((val, i) => ({
         x: dates[i],
         y: val
@@ -148,7 +147,7 @@ const renderChart = () => {
       type: 'line'
     },
     {
-      name: 'Lower Bound (80% CI)',
+      name: 'Lower Bound (95% CI)',
       data: lowerBounds.map((val, i) => ({
         x: dates[i],
         y: val

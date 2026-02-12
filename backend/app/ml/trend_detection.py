@@ -41,7 +41,7 @@ class TrendDetector:
         self.growth = growth
         self.MIN_WEEKS = 8           # need at least 8 data points for Prophet
         self.MIN_TRANSACTIONS = 20
-        self.MIN_WEEKS_YEARLY = 52   # ~1 year for yearly seasonality
+        self.MIN_WEEKS_YEARLY = 78   # ~1.5 years minimum for reliable yearly seasonality (2 cycles)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -142,13 +142,16 @@ class TrendDetector:
         use_weekly = False
 
         # --- Prophet hyperparameters ------------------------------------------
-        # Changepoint: allow trend to change, but not overfit
+        # Changepoint flexibility:
+        # - Short data (<26w): high flexibility (0.3) to catch any trend
+        # - Medium data (26-78w): moderate (0.15) — typical 12-month customer
+        # - Long data (>=78w): conservative (0.05) to avoid overfitting
         if weeks_span < 26:
-            cp_scale = 0.1
+            cp_scale = 0.3
         elif weeks_span < 78:
-            cp_scale = 0.05
+            cp_scale = 0.15
         else:
-            cp_scale = 0.01
+            cp_scale = 0.05
 
         # Seasonality prior: keep it small so TREND is dominant in the visual
         sp_scale = 5.0 if use_yearly else 1.0
@@ -186,11 +189,13 @@ class TrendDetector:
             future_trend = forecast.iloc[hist_len:]["trend"].values
             if len(future_trend) > 1:
                 x = np.arange(len(future_trend), dtype=float)
-                # slope_per_week = change in weekly spending per week
-                # * 4.33 = monthly change in weekly spending (AED/week per month)
+                # slope_per_week = change in weekly spending (AED) per week
                 slope_per_week = float(np.polyfit(x, future_trend, 1)[0])
                 trend_slope_per_day = slope_per_week / 7.0
-                trend_slope_per_month = slope_per_week * 4.33
+                # Monthly spending change = weekly change * 4.33 weeks/month * 4.33 weeks/month
+                # (slope_per_week * 4.33 = how much weekly spending changes per month,
+                #  * 4.33 again = total monthly spending change in AED/month)
+                trend_slope_per_month = slope_per_week * 4.33 * 4.33
             elif hist_len >= 4:
                 # Fallback: use last 4 weeks of history
                 hist_trend = forecast.iloc[max(0, hist_len - 4):hist_len]["trend"].values
@@ -198,7 +203,7 @@ class TrendDetector:
                     x = np.arange(len(hist_trend), dtype=float)
                     slope_per_week = float(np.polyfit(x, hist_trend, 1)[0])
                     trend_slope_per_day = slope_per_week / 7.0
-                    trend_slope_per_month = slope_per_week * 4.33
+                    trend_slope_per_month = slope_per_week * 4.33 * 4.33
 
             # --- Seasonality amplitude ----------------------------------------
             seasonality_amplitude = 0.0
@@ -322,11 +327,13 @@ class TrendDetector:
     def get_trend_category(trend_slope_per_month: float) -> str:
         """Categorize trend direction.
 
-        slope_per_month = change in weekly spending per month (AED/week per month).
-        Thresholds: >+25 = INCREASING, <-25 = DECREASING, otherwise STABLE.
+        slope_per_month = actual monthly spending change in AED/month
+        (slope_per_week * 4.33 * 4.33).
+        Thresholds: >+100 = INCREASING, <-100 = DECREASING, otherwise STABLE.
+        Typical range: stable ~0, declining -50 to -500, growing +50 to +500.
         """
-        if trend_slope_per_month > 25:
+        if trend_slope_per_month > 100:
             return "INCREASING"
-        if trend_slope_per_month < -25:
+        if trend_slope_per_month < -100:
             return "DECREASING"
         return "STABLE"

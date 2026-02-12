@@ -31,23 +31,17 @@
 
         <!-- UNIFIED DASHBOARD (when data loaded) -->
         <template v-else-if="store.dataGenerated">
-          <!-- UC LEGEND (Top Section) -->
-          <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-lg p-6 mb-8">
-            <h3 class="font-bold text-lg text-blue-900 mb-4">📋 Use Case Overview</h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div class="flex gap-3">
-                <span class="bg-green-200 text-green-900 px-3 py-1 rounded font-bold text-sm flex-shrink-0">[UC-1]</span>
-                <div class="text-sm text-gray-800">
-                  <p class="font-semibold">Spending Trends & Behavior</p>
-                  <p class="text-xs text-gray-700">Historical transaction analysis, trend detection, anomalies</p>
-                </div>
+          <!-- UC LEGEND (Compact Inline) -->
+          <div class="flex gap-3 mb-6 flex-wrap items-center">
+            <span class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Use Cases:</span>
+            <div class="flex gap-3 flex-wrap">
+              <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 transition-colors" title="Spending Trends & Behavior - Historical transaction analysis, trend detection, anomalies">
+                <span class="bg-green-200 text-green-900 px-2 py-0.5 rounded font-bold text-xs">[UC-1]</span>
+                <span class="text-xs font-medium text-green-900">Trends</span>
               </div>
-              <div class="flex gap-3">
-                <span class="bg-red-200 text-red-900 px-3 py-1 rounded font-bold text-sm flex-shrink-0">[UC-2]</span>
-                <div class="text-sm text-gray-800">
-                  <p class="font-semibold">Churn Risk & Prediction</p>
-                  <p class="text-xs text-gray-700">ML-based risk assessment, SHAP explainability, recommendations</p>
-                </div>
+              <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors" title="Churn Risk & Prediction - ML-based risk assessment, SHAP explainability, recommendations">
+                <span class="bg-red-200 text-red-900 px-2 py-0.5 rounded font-bold text-xs">[UC-2]</span>
+                <span class="text-xs font-medium text-red-900">Churn</span>
               </div>
             </div>
           </div>
@@ -61,16 +55,21 @@
               class="w-full max-w-xl flex items-center justify-between px-4 py-2.5 bg-white border-2 border-gray-200 rounded-lg hover:border-brand-400 transition-colors text-left"
               :class="{ 'border-brand-500 ring-2 ring-brand-100': dropdownOpen }"
             >
-              <span v-if="store.selectedCustomerId" class="flex items-center gap-3">
-                <span class="font-medium text-gray-900 text-sm">
+              <span v-if="store.selectedCustomerId" class="flex items-center gap-3 min-w-0">
+                <span class="font-medium text-gray-900 text-sm truncate">
                   {{ store.customers.find(c => c.customer_id === store.selectedCustomerId)?.name || store.selectedCustomerId }}
                 </span>
-                <span class="text-xs text-gray-500">{{ store.selectedCustomerId }}</span>
                 <span
-                  v-if="store.customers.find(c => c.customer_id === store.selectedCustomerId)?.pattern"
-                  class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded"
+                  v-if="store.customers.find(c => c.customer_id === store.selectedCustomerId)?.tier_label"
+                  :class="{
+                    'bg-green-100 text-green-700': ['stable','growth'].includes(store.customers.find(c => c.customer_id === store.selectedCustomerId)?.persona_tier),
+                    'bg-yellow-100 text-yellow-700': store.customers.find(c => c.customer_id === store.selectedCustomerId)?.persona_tier === 'at_risk',
+                    'bg-red-100 text-red-700': store.customers.find(c => c.customer_id === store.selectedCustomerId)?.persona_tier === 'anomaly',
+                    'bg-gray-100 text-gray-600': !['stable','growth','at_risk','anomaly'].includes(store.customers.find(c => c.customer_id === store.selectedCustomerId)?.persona_tier)
+                  }"
+                  class="text-xs px-2 py-0.5 rounded flex-shrink-0"
                 >
-                  {{ store.customers.find(c => c.customer_id === store.selectedCustomerId)?.pattern }}
+                  {{ store.customers.find(c => c.customer_id === store.selectedCustomerId)?.tier_label }}
                 </span>
               </span>
               <span v-else class="text-gray-400 text-sm">Choose a customer...</span>
@@ -99,34 +98,43 @@
                   />
                 </div>
               </div>
-              <!-- Customer list -->
-              <div class="max-h-72 overflow-y-auto">
-                <button
-                  v-for="customer in filteredCustomers"
-                  :key="customer.customer_id"
-                  @click="selectAndClose(customer.customer_id)"
-                  class="w-full flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 text-left transition-colors"
-                  :class="{ 'bg-brand-50': store.selectedCustomerId === customer.customer_id }"
-                >
-                  <span class="flex items-center gap-3 min-w-0">
-                    <span class="font-medium text-sm text-gray-900 truncate">{{ customer.name }}</span>
-                    <span class="text-xs text-gray-400 flex-shrink-0">{{ customer.customer_id }}</span>
-                    <span v-if="customer.pattern" class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded flex-shrink-0">
-                      {{ customer.pattern }}
-                    </span>
-                  </span>
-                  <span
-                    v-if="customer.churn_risk_score !== undefined"
-                    :class="{
-                      'bg-red-100 text-red-700': customer.churn_risk_score > 70,
-                      'bg-yellow-100 text-yellow-700': customer.churn_risk_score >= 40 && customer.churn_risk_score <= 70,
-                      'bg-green-100 text-green-700': customer.churn_risk_score < 40
-                    }"
-                    class="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ml-2"
+              <!-- Customer list grouped by tier -->
+              <div class="max-h-80 overflow-y-auto">
+                <template v-for="(group, tier) in groupedCustomers" :key="tier">
+                  <div v-if="group.length > 0" class="px-3 pt-2 pb-0.5 text-xs font-semibold uppercase tracking-wide text-gray-400 flex items-center gap-1.5">
+                    <span :class="{
+                      'text-green-500': tier === 'stable' || tier === 'growth',
+                      'text-yellow-500': tier === 'at_risk',
+                      'text-red-500': tier === 'anomaly',
+                      'text-gray-400': tier === 'normal' || tier === 'lifestyle_shift' || tier === 'silent_churn'
+                    }">●</span>
+                    {{ tierGroupLabel(tier) }} ({{ group.length }})
+                  </div>
+                  <button
+                    v-for="customer in group"
+                    :key="customer.customer_id"
+                    @click="selectAndClose(customer.customer_id)"
+                    class="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-50 text-left transition-colors"
+                    :class="{ 'bg-brand-50': store.selectedCustomerId === customer.customer_id }"
+                    :title="customer.narrative"
                   >
-                    {{ Math.round(customer.churn_risk_score) }}%
-                  </span>
-                </button>
+                    <span class="flex items-center gap-2 min-w-0">
+                      <span class="font-medium text-sm text-gray-900 truncate">{{ customer.name }}</span>
+                      <span v-if="customer.narrative" class="text-xs text-gray-400 truncate hidden sm:block max-w-32">{{ customer.narrative }}</span>
+                    </span>
+                    <span
+                      v-if="customer.churn_risk_score != null"
+                      :class="{
+                        'bg-red-100 text-red-700': customer.churn_risk_score > 60,
+                        'bg-yellow-100 text-yellow-700': customer.churn_risk_score >= 30 && customer.churn_risk_score <= 60,
+                        'bg-green-100 text-green-700': customer.churn_risk_score < 30
+                      }"
+                      class="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ml-2"
+                    >
+                      {{ Math.round(customer.churn_risk_score) }}%
+                    </span>
+                  </button>
+                </template>
                 <div v-if="filteredCustomers.length === 0" class="px-4 py-3 text-sm text-gray-400 text-center">
                   No customers found
                 </div>
@@ -345,9 +353,37 @@ const filteredCustomers = computed(() => {
   return store.customers.filter(c =>
     c.customer_id.toLowerCase().includes(q) ||
     (c.name || '').toLowerCase().includes(q) ||
-    (c.pattern || '').toLowerCase().includes(q)
+    (c.pattern || '').toLowerCase().includes(q) ||
+    (c.tier_label || '').toLowerCase().includes(q) ||
+    (c.narrative || '').toLowerCase().includes(q)
   )
 })
+
+// Group customers by tier for organised dropdown display
+const TIER_ORDER = ['stable', 'growth', 'at_risk', 'anomaly', 'normal', 'silent_churn', 'lifestyle_shift']
+const groupedCustomers = computed(() => {
+  const groups = {}
+  for (const tier of TIER_ORDER) groups[tier] = []
+  for (const c of filteredCustomers.value) {
+    const tier = c.persona_tier || c.pattern || 'normal'
+    if (!groups[tier]) groups[tier] = []
+    groups[tier].push(c)
+  }
+  return groups
+})
+
+function tierGroupLabel(tier) {
+  const labels = {
+    stable: '✅ Stable',
+    growth: '📈 Growth',
+    at_risk: '⚠️ At Risk',
+    anomaly: '🔴 Anomaly',
+    normal: 'Normal',
+    silent_churn: 'Silent Churn',
+    lifestyle_shift: 'Lifestyle Shift',
+  }
+  return labels[tier] || tier
+}
 
 function selectAndClose(customerId) {
   store.selectCustomer(customerId)

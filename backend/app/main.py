@@ -123,16 +123,41 @@ async def get_all_customers(db: Session = Depends(get_db)):
     logger.info("Fetching all customers from database")
 
     try:
-        customers = db.query(Customer).all()
+        customers = db.query(Customer).order_by(Customer.id).all()
 
-        customer_list = [
-            {
+        # Tier → badge label mapping for display
+        tier_labels = {
+            "stable": "Stable",
+            "at_risk": "At Risk",
+            "anomaly": "Anomaly",
+            "growth": "Growth",
+        }
+
+        customer_list = []
+        for c in customers:
+            if c.id.startswith("persona_") and c.persona_name:
+                # Named persona: display human-readable name
+                # "John_Stable" → "John Stable", "Sarah_SilentChurn" → "Sarah SilentChurn"
+                display_name = c.persona_name.replace("_", " ")
+                tier = c.persona_tier or "stable"
+                tier_label = tier_labels.get(tier, tier.capitalize())
+            else:
+                # Background synthetic customer
+                display_name = f"Customer {c.id[-6:]}"
+                tier = c.pattern or "normal"
+                tier_label = tier.replace("_", " ").capitalize()
+
+            customer_list.append({
                 "customer_id": c.id,
-                "name": f"Customer {c.id[-6:]}" if c.id.startswith("customer_") else c.id,
+                "name": display_name,
+                "persona_tier": tier,
+                "tier_label": tier_label,
+                "pattern": tier,
+                "is_churned": c.is_churned or 0,
+                "churn_risk_score": (c.churn_risk_score * 100) if c.churn_risk_score else None,
+                "narrative": c.narrative or "",
                 "status": "active"
-            }
-            for c in customers
-        ]
+            })
 
         return {
             "total": len(customer_list),
@@ -203,6 +228,7 @@ async def get_customer_profile(
     trend_detector = TrendDetector(
         yearly_seasonality=config.PROPHET_YEARLY_SEASONALITY,
         weekly_seasonality=config.PROPHET_WEEKLY_SEASONALITY,
+        interval_width=config.PROPHET_INTERVAL_WIDTH,
     )
     trend_result = trend_detector.detect_trend(customer_df)
     trend_slope = trend_result["trend_slope"]
@@ -258,7 +284,7 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
         'time_of_day': t.time_of_day
     } for t in transactions]).sort_values("date")
 
-    trend_detector = TrendDetector()
+    trend_detector = TrendDetector(interval_width=config.PROPHET_INTERVAL_WIDTH)
     # Forecast 90 days ahead (~3 months) for better visibility
     trend_result = trend_detector.detect_trend(customer_df, periods_ahead=12)
 
@@ -315,7 +341,7 @@ async def get_customer_anomalies(customer_id: str, db: Session = Depends(get_db)
     if not transactions:
         raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
 
-    # Convert to DataFrame
+    # Convert to DataFrame - reset_index ensures iloc[] matches iterrows() labels
     customer_df = pd.DataFrame([{
         'customer_id': t.customer_id,
         'date': t.date,
@@ -326,20 +352,16 @@ async def get_customer_anomalies(customer_id: str, db: Session = Depends(get_db)
         'merchant': t.merchant,
         'country': t.country,
         'time_of_day': t.time_of_day
-    } for t in transactions]).sort_values("date")
+    } for t in transactions]).sort_values("date").reset_index(drop=True)
 
     # Detect anomalies
-    anomaly_detector = AnomalyDetector(
-        contamination=config.ISOLATION_FOREST_CONTAMINATION,
-        n_estimators=config.ISOLATION_FOREST_N_ESTIMATORS
-    )
+    anomaly_detector = AnomalyDetector()
     feature_vector = AnomalyDetector.get_anomaly_features(customer_df)
     anomalies = anomaly_detector.detect(customer_df, feature_vector)
 
     # Convert to response format
     anomaly_details = []
-    for anomaly in anomalies[:5]:  # Return top 5
-        # Get transaction details if available
+    for anomaly in anomalies[:5]:  # Return top 5 by severity
         anomaly_idx = anomaly.get("index", 0)
         if anomaly_idx < len(customer_df):
             trans = customer_df.iloc[anomaly_idx]
