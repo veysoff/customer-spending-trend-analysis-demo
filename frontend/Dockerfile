@@ -3,7 +3,7 @@ FROM node:18-alpine as builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm install --include=dev
 
 COPY . .
 RUN ./node_modules/.bin/vite build
