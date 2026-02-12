@@ -192,10 +192,8 @@ class TrendDetector:
                 # slope_per_week = change in weekly spending (AED) per week
                 slope_per_week = float(np.polyfit(x, future_trend, 1)[0])
                 trend_slope_per_day = slope_per_week / 7.0
-                # Monthly spending change = weekly change * 4.33 weeks/month * 4.33 weeks/month
-                # (slope_per_week * 4.33 = how much weekly spending changes per month,
-                #  * 4.33 again = total monthly spending change in AED/month)
-                trend_slope_per_month = slope_per_week * 4.33 * 4.33
+                # Monthly spending change = weekly change * 4.33 weeks/month
+                trend_slope_per_month = slope_per_week * 4.33
             elif hist_len >= 4:
                 # Fallback: use last 4 weeks of history
                 hist_trend = forecast.iloc[max(0, hist_len - 4):hist_len]["trend"].values
@@ -203,7 +201,7 @@ class TrendDetector:
                     x = np.arange(len(hist_trend), dtype=float)
                     slope_per_week = float(np.polyfit(x, hist_trend, 1)[0])
                     trend_slope_per_day = slope_per_week / 7.0
-                    trend_slope_per_month = slope_per_week * 4.33 * 4.33
+                    trend_slope_per_month = slope_per_week * 4.33
 
             # --- Seasonality amplitude ----------------------------------------
             seasonality_amplitude = 0.0

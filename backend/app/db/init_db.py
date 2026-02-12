@@ -1,7 +1,7 @@
 """Database initialization with idempotent data generation."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from .database import SessionLocal, create_tables
 from .models import Customer, Transaction
@@ -65,8 +65,10 @@ def _generate_demo_personas(db: Session):
     """
     logger.info(f"Generating {len(DEMO_PERSONAS_REGISTRY)} demo personas...")
 
-    start_date = datetime(2024, 1, 1)
-    end_date = datetime(2024, 12, 31)
+    # Dynamic dates: last 24 months of data (always current, never stale)
+    # 2 full years required for Prophet to detect yearly seasonality reliably (2 cycles)
+    end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = (end_date - timedelta(days=730)).replace(day=1)
 
     total_transactions = 0
     total_personas = 0

@@ -383,15 +383,6 @@ pytest tests/ -v --cov=app
 ```
 
 ---
-
-## 📚 Documentation
-
-**Deep Dives:**
-- **[CLAUDE.md](./CLAUDE.md)** — Full project context & architecture decisions
-- **[documents/INDEX.md](./documents/INDEX.md)** — Documentation navigation hub
-- **[documents/core/](./documents/core/)** — Current specifications (API, ML pipeline, deployment)
-- **[documents/phases/](./documents/phases/)** — Phase completion reports (historical)
-
 ---
 
 ## 🛠️ Tech Stack
@@ -439,5 +430,4 @@ A: Development uses SQLite & in-memory caching. Production should use PostgreSQL
 
 - Uses **synthetic data** to simulate real banking scenarios
 - **No external dependencies** beyond Docker (all packages in requirements.txt)
-- **Full source transparency** — All code documented and reviewed
 - Built for **PoC & learning** — Suitable for production with architectural enhancements
