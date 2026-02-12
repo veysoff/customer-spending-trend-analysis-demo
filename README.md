@@ -11,8 +11,6 @@ AI-powered banking analytics platform for detecting customer spending trends, an
 
 ## 🚀 Quick Start (Docker)
 
-⭐ **[QUICK_START_GUIDE.md](./QUICK_START_GUIDE.md)** — Ultra-simple 2-minute guide (start here!)
-
 ### Prerequisites
 - Docker & Docker Compose installed
 - ~3 GB disk space for containers + database
@@ -30,7 +28,7 @@ That's it! The application will **automatically**:
 
 1. ✅ Build backend & frontend containers
 2. ✅ Create SQLite database schema (`backend/data/spending.db`)
-3. ✅ Generate 40 named personas + 960 background customers (~335k transactions)
+3. ✅ Generate 40 named demo personas with transaction histories
 4. ✅ **Train & cache ML models** (Prophet, Isolation Forest, XGBoost)
 5. ✅ Start API on `http://localhost:8000`
 6. ✅ Start Dashboard on `http://localhost:3000`
@@ -76,9 +74,8 @@ docker-compose logs -f
 **What happens automatically on first run:**
 
 1. **Database Generation** (~60 seconds)
-   - 40 named demo personas (with specific behavioral patterns)
-   - 960 background synthetic customers
-   - ~335,000 transactions (24 months per customer)
+   - 40 named demo personas (with specific behavioral patterns, ~150 transactions each)
+   - ~6,000 transactions total from all personas
    - Created in SQLite with indexed queries
 
 2. **Model Training** (~90 seconds)
@@ -117,20 +114,16 @@ SQLite Database + ML Pipeline
      ├─ YES → Load database + models (10 seconds)
      └─ NO → Go to step 3
      ↓
-3. Generate 40 demo personas (named customers with specific patterns)
+3. Generate 40 demo personas with transaction histories (~6k transactions total)
      ↓
-4. Generate 960 background synthetic customers
-     ↓
-5. Create 335k+ transactions in SQLite database
-     ↓
-6. Train ML models on generated data:
+4. Train ML models on generated data:
      ├─ Prophet: Learns spending trends for each customer
      ├─ Isolation Forest: Learns anomaly patterns
      └─ XGBoost: Learns churn prediction (binary classifier)
      ↓
-7. Cache models in memory for fast inference
+5. Cache models in memory for fast inference
      ↓
-8. API ready ✅ (takes 2-3 minutes total)
+6. API ready ✅ (takes 2-3 minutes total)
 ```
 
 **All models are trained on first startup, then cached:**
@@ -143,11 +136,9 @@ SQLite Database + ML Pipeline
 ## 📊 What Gets Generated Automatically
 
 ### Synthetic Customer Data
-- **1000 customers total**:
-  - 40 named demo personas (diverse, realistic behavioral patterns)
-  - 960 background customers (random generation)
-- **~335,000 transactions** (24 months per customer)
-- **Stored in SQLite** (`backend/data/spending.db`, ~24 MB)
+- **40 named demo personas** with diverse, realistic behavioral patterns
+- **~6,000 transactions** across all personas (24 months per persona)
+- **Stored in SQLite** (`backend/data/spending.db`, ~2-3 MB)
 - **Deterministic** — Same data on each run (seed-based generation)
 
 ### Example Demo Personas
@@ -318,7 +309,7 @@ Response:
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| **Database size** | ~24 MB | SQLite with 1000 customers + 335k transactions |
+| **Database size** | ~2-3 MB | SQLite with 40 demo personas + 6k transactions |
 | **Query time** | <1 ms | Indexed lookups |
 | **Model training** | ~30 seconds | XGBoost with 15 features |
 | **Prediction latency** | 100-150 ms | Per customer analysis |
@@ -395,9 +386,6 @@ pytest tests/ -v --cov=app
 
 ## 📚 Documentation
 
-**Getting Started:**
-- **[INITIALIZATION_FLOW.md](./INITIALIZATION_FLOW.md)** — ⭐ **Start here!** Detailed explanation of what happens on startup (data generation, model training, timing)
-
 **Deep Dives:**
 - **[CLAUDE.md](./CLAUDE.md)** — Full project context & architecture decisions
 - **[documents/INDEX.md](./documents/INDEX.md)** — Documentation navigation hub
@@ -425,7 +413,7 @@ pytest tests/ -v --cov=app
 ## ❓ FAQ
 
 **Q: How long does first startup take?**
-A: 2-3 minutes. It's generating 14,500+ synthetic transactions, creating database indexes, and training ML models.
+A: 2-3 minutes. It's generating 40 demo personas with transactions, creating database indexes, and training ML models.
 
 **Q: Can I use real data instead of synthetic?**
 A: Yes. Modify `backend/app/db/init_db.py` to load from your data source instead of the persona generator.
