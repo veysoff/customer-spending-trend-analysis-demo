@@ -210,6 +210,7 @@ __marimo__/
 
 # Claude Code local settings (keep locally, don't commit)
 .claude/
+claude.md
 
 # Documentation - consolidating into single folder (temporary during reorganization)
 documents/
