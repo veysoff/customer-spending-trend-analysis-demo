@@ -63,7 +63,18 @@ const renderChart = () => {
   const actuals = props.trends.trend_data.map(d => d.actual ?? null)
 
   // Find the boundary index where historical data ends and forecast begins
-  const boundaryIdx = props.trends.trend_data.findIndex(d => d.actual === null || d.actual === undefined)
+  // Look for the LAST actual value, not the first null (to handle gaps in history correctly)
+  let boundaryIdx = -1
+  for (let i = props.trends.trend_data.length - 1; i >= 0; i--) {
+    if (props.trends.trend_data[i].actual !== null && props.trends.trend_data[i].actual !== undefined) {
+      boundaryIdx = i + 1  // forecast starts after last actual
+      break
+    }
+  }
+  // If no actual values found at all, use first null
+  if (boundaryIdx === -1) {
+    boundaryIdx = props.trends.trend_data.findIndex(d => d.actual === null || d.actual === undefined)
+  }
 
   // Forecast line: null during historical period, yhat only from boundary onwards.
   // Include the last actual point as the anchor so the line connects smoothly.

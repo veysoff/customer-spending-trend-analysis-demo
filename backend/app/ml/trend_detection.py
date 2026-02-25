@@ -327,11 +327,13 @@ class TrendDetector:
 
         slope_per_month = actual monthly spending change in AED/month
         (slope_per_week * 4.33 * 4.33).
-        Thresholds: >+100 = INCREASING, <-100 = DECREASING, otherwise STABLE.
-        Typical range: stable ~0, declining -50 to -500, growing +50 to +500.
+        Thresholds: >+20 = INCREASING, <-20 = DECREASING, otherwise STABLE.
+        Typical range: stable ~0, declining -20 to -500, growing +20 to +500.
+        Lowered from ±100 to ±20 to reflect realistic monthly spending changes
+        (average customer spends 200-400 AED/month, so ±10% = ±20-40 AED is significant).
         """
-        if trend_slope_per_month > 100:
+        if trend_slope_per_month > 20:
             return "INCREASING"
-        if trend_slope_per_month < -100:
+        if trend_slope_per_month < -20:
             return "DECREASING"
         return "STABLE"

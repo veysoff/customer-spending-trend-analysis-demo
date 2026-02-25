@@ -1,3 +1,5 @@
+name: customer-spending-trend-analysis
+
 services:
   # Backend API Service
   backend:
