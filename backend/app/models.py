@@ -54,6 +54,8 @@ class TrendResponse(BaseModel):
     seasonality_amplitude: float
     has_seasonality: bool
     data_span_days: int
+    rolling_averages: Dict[str, float] = {}  # UC-1: 7d / 30d / 90d daily spend averages
+    channel_trend: List[Dict] = []  # UC-1: per-month online/pos/atm ratios
     metadata: Optional[Dict] = None
     trend_analysis: Optional[Dict] = None  # FIX #3 & #4: Weighted trend + seasonality detection
 
@@ -85,6 +87,7 @@ class CustomerProfileResponse(BaseModel):
     current_monthly_spending: float
     spending_trend: str
     behavior_change: Optional[str]
+    behavior_flags: List[str] = []
     persona: Optional[PersonaMetadata] = None
 
 
@@ -135,6 +138,7 @@ class ChurnPredictionResponse(BaseModel):
     churn_probability: float
     churn_prediction: str  # "churned" or "stable"
     confidence: float
+    risk_tier: str  # "low" / "medium" / "high" (requirements terminology)
     top_5_factors: List[ChurnPredictionDetail] = []
     account_metrics: Dict[str, float] = {}
 

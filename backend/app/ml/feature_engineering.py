@@ -144,6 +144,43 @@ class FeatureEngineer:
         return features
 
     @staticmethod
+    def get_rolling_averages(df: pd.DataFrame) -> Dict[str, float]:
+        """Compute rolling average daily spend over 7, 30, and 90 day windows.
+
+        Returns:
+            Dict with keys "7d", "30d", "90d" and mean daily spend values.
+        """
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        daily = df.set_index("date").resample("D")["amount"].sum().fillna(0)
+        return {
+            "7d": round(float(daily.tail(7).mean()), 2),
+            "30d": round(float(daily.tail(30).mean()), 2),
+            "90d": round(float(daily.tail(90).mean()), 2),
+        }
+
+    @staticmethod
+    def get_channel_trend(df: pd.DataFrame) -> list:
+        """Compute per-month channel ratios (online/pos/atm) over transaction history.
+
+        Returns:
+            List of dicts with "month", "online_ratio", "pos_ratio", "atm_ratio".
+        """
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df["month"] = df["date"].dt.to_period("M").astype(str)
+        result = []
+        for month, group in df.groupby("month"):
+            dist = group["channel"].value_counts(normalize=True)
+            result.append({
+                "month": month,
+                "online_ratio": round(float(dist.get("ONLINE", 0)), 3),
+                "pos_ratio": round(float(dist.get("POS", 0)), 3),
+                "atm_ratio": round(float(dist.get("ATM", 0)), 3),
+            })
+        return result
+
+    @staticmethod
     def get_feature_vector(features: Dict[str, Any]) -> np.ndarray:
         """Convert features to numpy array for ML models."""
         # Safe extraction of list-based features (handle empty lists)

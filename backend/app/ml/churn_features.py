@@ -2,7 +2,7 @@
 
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
@@ -91,11 +91,11 @@ class ChurnFeatureEngineer:
             return 365  # No transactions = very dormant
 
         last_transaction = customer.last_transaction_date
-        now = datetime.now()  # naive local time — consistent with DB storage
+        now = datetime.now(timezone.utc)
 
-        # Strip timezone info if present (defensive)
-        if hasattr(last_transaction, 'tzinfo') and last_transaction.tzinfo is not None:
-            last_transaction = last_transaction.replace(tzinfo=None)
+        # Ensure last_transaction is timezone-aware for comparison
+        if last_transaction.tzinfo is None:
+            last_transaction = last_transaction.replace(tzinfo=timezone.utc)
 
         days_since = (now - last_transaction).days
         return float(max(0, days_since))
@@ -176,8 +176,10 @@ class ChurnFeatureEngineer:
         if not customer.created_at:
             return 0.0
 
-        created = customer.created_at.replace(tzinfo=None) if customer.created_at.tzinfo else customer.created_at
-        age_days = (datetime.now() - created).days
+        created = customer.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - created).days
         if age_days < 0:
             age_days = 0  # created_at in future → treat as new account
         age_months = age_days / 30.44
@@ -194,7 +196,7 @@ class ChurnFeatureEngineer:
             return 0.0
 
         # Get average monthly spending from transactions (precise calculation)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         six_months_ago = now - timedelta(days=180)
 
         recent_transactions = db.query(func.sum(Transaction.amount)).filter(
@@ -236,7 +238,7 @@ class ChurnFeatureEngineer:
 
         inactive_months = 0
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         for months_back in range(6):
             # months_back=0 → current month (now-30d to now)
             # months_back=1 → previous month (now-60d to now-30d), etc.

@@ -248,6 +248,39 @@ async def get_customer_profile(
             expected_risk_score=customer.expected_risk_score
         )
 
+    # Compute behavior flags from UC-1 features
+    behavior_flags = []
+
+    # "channel_migration" — online_ratio grew > 20pp vs 90 days prior
+    recent_cutoff = customer_df["date"].max() - pd.Timedelta(days=90)
+    older_df = customer_df[customer_df["date"] < recent_cutoff]
+    recent_df = customer_df[customer_df["date"] >= recent_cutoff]
+    if len(older_df) > 0 and len(recent_df) > 0:
+        older_online = (older_df["channel"] == "ONLINE").sum() / len(older_df)
+        recent_online = (recent_df["channel"] == "ONLINE").sum() / len(recent_df)
+        if (recent_online - older_online) > 0.20:
+            behavior_flags.append("channel_migration")
+
+    # "declining_diversity" — low category entropy and negative trend slope
+    if features.get("category_entropy", 1.0) < 1.0 and features.get("trend_slope", 0.0) < 0:
+        behavior_flags.append("declining_diversity")
+
+    # "spending_spike" — any transaction in last 30 days > 3x mean amount
+    last_30_cutoff = customer_df["date"].max() - pd.Timedelta(days=30)
+    recent_30 = customer_df[customer_df["date"] >= last_30_cutoff]
+    mean_amount = customer_df["amount"].mean()
+    if len(recent_30) > 0 and mean_amount > 0:
+        if (recent_30["amount"] > 3 * mean_amount).any():
+            behavior_flags.append("spending_spike")
+
+    # "silent_churn" — no transactions in last 60 days
+    from datetime import datetime, timezone as _tz
+    last_transaction_date = customer_df["date"].max()
+    today = pd.Timestamp(datetime.now(_tz.utc)).tz_localize(None)
+    dormancy_days = (today - last_transaction_date).days
+    if dormancy_days > 60:
+        behavior_flags.append("silent_churn")
+
     return CustomerProfileResponse(
         customer_id=customer_id,
         total_transactions=len(customer_df),
@@ -258,6 +291,7 @@ async def get_customer_profile(
         current_monthly_spending=features["current_monthly_spending"],
         spending_trend=trend_category,
         behavior_change=behavior_change,
+        behavior_flags=behavior_flags,
         persona=persona_metadata,
     )
 
@@ -299,6 +333,9 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
     # FIX #4: Add seasonality detection
     seasonality_detection = SeasonalityDetector.detect_seasonality(customer_df)
 
+    rolling_averages = FeatureEngineer.get_rolling_averages(customer_df)
+    channel_trend = FeatureEngineer.get_channel_trend(customer_df)
+
     return TrendResponse(
         customer_id=customer_id,
         trend_data=[
@@ -319,6 +356,8 @@ async def get_customer_trends(customer_id: str, db: Session = Depends(get_db)) -
         seasonality_amplitude=trend_result.get("seasonality_amplitude", 0.0),
         has_seasonality=trend_result.get("has_seasonality", False),
         data_span_days=trend_result.get("data_span_days", 0),
+        rolling_averages=rolling_averages,
+        channel_trend=channel_trend,
         metadata=trend_result.get("metadata", {}),
         trend_analysis={  # FIX #3 & #4: New fields
             "prophet_trend": {
@@ -731,12 +770,21 @@ async def get_customer_churn_prediction(
             logger.warning("Failed to generate SHAP explanation: %s", str(e))
             top_5_factors = []
 
+        # Compute risk tier per requirements (low/medium/high)
+        if churn_probability < 0.40:
+            risk_tier = "low"
+        elif churn_probability < 0.70:
+            risk_tier = "medium"
+        else:
+            risk_tier = "high"
+
         # Build response
         return ChurnPredictionResponse(
             customer_id=customer_id,
             churn_probability=churn_probability,
             churn_prediction="churned" if prediction == 1 else "stable",
             confidence=float(max(probability)),
+            risk_tier=risk_tier,
             top_5_factors=top_5_factors,
             account_metrics={
                 "credit_limit": float(customer.credit_limit or 0),
@@ -837,12 +885,21 @@ async def predict_all_customers_churn(
                     stable_count += 1
                 total_probability += churn_probability
 
+                # Compute risk tier per requirements (low/medium/high)
+                if churn_probability < 0.40:
+                    batch_risk_tier = "low"
+                elif churn_probability < 0.70:
+                    batch_risk_tier = "medium"
+                else:
+                    batch_risk_tier = "high"
+
                 # Build prediction response
                 pred_response = ChurnPredictionResponse(
                     customer_id=customer.id,
                     churn_probability=churn_probability,
                     churn_prediction="churned" if prediction == 1 else "stable",
                     confidence=float(max(probability)),
+                    risk_tier=batch_risk_tier,
                     top_5_factors=[],
                     account_metrics={
                         "credit_limit": float(customer.credit_limit or 0),

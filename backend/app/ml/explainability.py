@@ -48,7 +48,8 @@ class ExplainabilityEngine:
             "shap_values": {
                 name: float(val)
                 for name, val in zip(ExplainabilityEngine.FEATURE_NAMES, shap_values[0])
-            }
+            },
+            "explainability_method": "weighted_approximation",
         }
 
     @staticmethod
