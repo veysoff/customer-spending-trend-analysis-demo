@@ -1,4 +1,4 @@
-FROM node:18-alpine as builder
+FROM node:20-alpine as builder
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN npm install --include=dev
 COPY . .
 RUN ./node_modules/.bin/vite build
 
-FROM nginx:alpine
+FROM nginx:latest
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 
