@@ -13,7 +13,10 @@ from .models import (
     GenerateDataRequest, GenerateDataResponse,
     CustomerProfileResponse, TrendResponse, AnomalyResponse, AtRiskResponse,
     ChurnPredictionResponse, BatchChurnPredictionResponse, FeatureImportanceResponse,
-    ModelTrainingResponse, AIInsightResponse
+    ModelTrainingResponse, AIInsightResponse,
+    FraudModelTrainResponse, FraudSignalsResponse, FraudSignalItem, FraudFlagDetail,
+    FraudTransactionDetailResponse, BaselineComparison,
+    HighRiskTransactionsResponse, HighRiskTransactionItem,
 )
 from .db import initialize_database, get_db, CustomerRepository, TransactionRepository
 from .db.models import Customer, Transaction
@@ -34,12 +37,14 @@ logger = logging.getLogger(__name__)
 MODEL_CACHE = {
     "churn_model": None,
     "feature_scaler": None,
+    "fraud_detector": None,
     "loaded": False
 }
 
 def load_cached_models():
     """Load ML models once and cache them in memory."""
     import pickle
+    from .ml.fraud_model import FraudDetector
 
     if MODEL_CACHE["loaded"]:
         return MODEL_CACHE
@@ -59,6 +64,15 @@ def load_cached_models():
             logger.warning("⚠️ ML model files not found")
     except Exception as e:
         logger.error(f"❌ Failed to load cached models: {e}")
+
+    # Load fraud detector (auto-loads pkl if it exists; graceful if not trained yet)
+    try:
+        detector = FraudDetector()
+        MODEL_CACHE["fraud_detector"] = detector
+        status = "loaded (trained)" if detector.is_trained else "loaded (rule-based only)"
+        logger.info(f"✅ Fraud detector {status}")
+    except Exception as e:
+        logger.error(f"❌ Failed to load fraud detector: {e}")
 
     return MODEL_CACHE
 
@@ -105,6 +119,11 @@ async def health_check(db: Session = Depends(get_db)):
     try:
         customer_count = CustomerRepository(db).get_customer_count()
         xgboost_status = "loaded" if MODEL_CACHE.get("loaded") else "not_trained"
+        fraud_detector = MODEL_CACHE.get("fraud_detector")
+        fraud_status = (
+            "trained" if fraud_detector and fraud_detector.is_trained
+            else "rule_based_only"
+        )
         return {
             "status": "healthy",
             "database_ready": True,
@@ -113,6 +132,7 @@ async def health_check(db: Session = Depends(get_db)):
                 "xgboost_churn": xgboost_status,
                 "isolation_forest": "per_request",
                 "prophet": "per_request",
+                "fraud_detector": fraud_status,
             },
         }
     except Exception as e:
@@ -1228,6 +1248,360 @@ async def get_feature_importance(db: Session = Depends(get_db)) -> FeatureImport
             status_code=500,
             detail="Failed to retrieve feature importance"
         )
+
+
+# ============================================================================
+# UC-3: Fraud Detection Endpoints
+# ============================================================================
+
+
+@app.post("/api/ml/train-fraud-model", response_model=FraudModelTrainResponse)
+async def train_fraud_model(db: Session = Depends(get_db)) -> FraudModelTrainResponse:
+    """Train the global IsolationForest fraud detection model.
+
+    Trains on up to 50,000 transactions using 5 history-independent features:
+    amount, hour_of_day, channel_code, is_foreign_country, mcc_risk_code.
+
+    After training, all /fraud-signals requests use the combined
+    60% IF + 40% rule-based composite score.
+
+    Returns: Training result with transaction count and timestamp.
+    """
+    from .ml.fraud_model import FraudDetector
+
+    logger.info("Training fraud detection model...")
+
+    try:
+        detector = FraudDetector()
+        result = detector.train(db)
+        MODEL_CACHE["fraud_detector"] = detector
+
+        return FraudModelTrainResponse(
+            success=True,
+            message=f"Fraud model trained on {result['n_transactions_trained']} transactions",
+            n_transactions_trained=result["n_transactions_trained"],
+            contamination_pct=result["contamination_pct"],
+            model_path=str(FraudDetector.MODEL_PATH),
+            training_timestamp=result["timestamp"],
+        )
+    except Exception as e:
+        logger.error("Fraud model training failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Fraud model training failed: {str(e)}")
+
+
+@app.get("/api/customers/{customer_id}/fraud-signals", response_model=FraudSignalsResponse)
+async def get_fraud_signals(
+    customer_id: str,
+    days: int = 30,
+    min_score: float = 0.3,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> FraudSignalsResponse:
+    """Get fraud signals for a customer's recent transactions.
+
+    Scores transactions in the last `days` days using the global IsolationForest
+    model combined with rule-based features. Works in rule-based-only mode
+    before the model is trained.
+
+    Args:
+        days: Scoring window in days (default 30).
+        min_score: Minimum fraud score threshold (default 0.3).
+        limit: Maximum signals to return (default 20).
+
+    Returns: FraudSignalsResponse with flagged transactions sorted by score.
+    """
+    from .ml.fraud_model import FraudDetector
+
+    logger.info("Getting fraud signals for customer: %s", customer_id)
+
+    # Check customer exists
+    repo = CustomerRepository(db)
+    customer = repo.get_by_id(customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+    # Use cached detector or create a fresh one (auto-loads pkl if it exists)
+    detector: FraudDetector = MODEL_CACHE.get("fraud_detector") or FraudDetector()
+
+    try:
+        # Count total transactions in the window for the response metadata
+        from datetime import datetime, timedelta
+        from .db.models import Transaction as TxModel
+        cutoff = datetime.now() - timedelta(days=days)
+        total_in_window = (
+            db.query(TxModel)
+            .filter(
+                TxModel.customer_id == customer_id,
+                TxModel.date >= cutoff,
+            )
+            .count()
+        )
+
+        scored = detector.score_customer_recent(
+            customer_id=customer_id,
+            db=db,
+            days=days,
+            min_score=min_score,
+        )
+
+        # Apply limit
+        scored = scored[:limit]
+
+        signals = [
+            FraudSignalItem(
+                tx_id=s["tx_id"],
+                date=s["date"],
+                amount=s["amount"],
+                mcc_category=s["mcc_category"],
+                channel=s["channel"],
+                country=s["country"],
+                fraud_score=s["fraud_score"],
+                fraud_flags=s["fraud_flags"],
+                flag_details=[
+                    FraudFlagDetail(
+                        flag=d["flag"],
+                        label=d["label"],
+                        explanation=d["explanation"],
+                        severity=d["severity"],
+                    )
+                    for d in s["flag_details"]
+                ],
+                top_factor=s["top_factor"],
+            )
+            for s in scored
+        ]
+
+        model_status = "trained" if detector.is_trained else "rule_based_only"
+        customer_name = (
+            customer.persona_name.replace("_", " ") if customer.persona_name else None
+        )
+
+        return FraudSignalsResponse(
+            customer_id=customer_id,
+            customer_name=customer_name,
+            period_days=days,
+            total_transactions_analyzed=total_in_window,
+            flagged_count=len(signals),
+            model_status=model_status,
+            signals=signals,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error getting fraud signals for %s: %s", customer_id, str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to compute fraud signals")
+
+
+@app.get(
+    "/api/customers/{customer_id}/fraud-signals/{tx_id}",
+    response_model=FraudTransactionDetailResponse,
+)
+async def get_fraud_signal_detail(
+    customer_id: str,
+    tx_id: str,
+    db: Session = Depends(get_db),
+) -> FraudTransactionDetailResponse:
+    """Get detailed fraud analysis for a single flagged transaction.
+
+    Returns full 8-feature vector, baseline comparison statistics,
+    and human-readable flag explanations for the requested transaction.
+    """
+    from .ml.fraud_model import FraudDetector
+    from .ml.fraud_features import FraudFeatureExtractor
+    from .db.models import Transaction as TxModel
+
+    # Verify customer exists
+    repo = CustomerRepository(db)
+    customer = repo.get_by_id(customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+    # Load all customer transactions ordered by date
+    all_txs = (
+        db.query(TxModel)
+        .filter(TxModel.customer_id == customer_id)
+        .order_by(TxModel.date)
+        .all()
+    )
+
+    # Find the target transaction
+    target_tx = next((t for t in all_txs if t.id == tx_id), None)
+    if not target_tx:
+        raise HTTPException(status_code=404, detail=f"Transaction {tx_id} not found")
+
+    # Build history DataFrame (all transactions for context)
+    history_rows = [
+        {
+            "id": t.id,
+            "date": t.date,
+            "amount": t.amount,
+            "mcc": t.mcc,
+            "mcc_category": t.mcc_category,
+            "channel": t.channel,
+            "merchant": t.merchant,
+            "country": t.country,
+            "time_of_day": t.time_of_day,
+        }
+        for t in all_txs
+    ]
+    history_df = pd.DataFrame(history_rows)
+    history_df["date"] = pd.to_datetime(history_df["date"], errors="coerce")
+
+    # Find the row index of the target transaction
+    tx_idx = next((i for i, t in enumerate(all_txs) if t.id == tx_id), None)
+    tx_row = history_df.iloc[tx_idx]
+    prior_df = history_df.iloc[:tx_idx].copy() if tx_idx > 0 else pd.DataFrame(columns=history_df.columns)
+
+    # Extract full 8-feature vector
+    features = FraudFeatureExtractor.extract(tx_row, prior_df)
+    fraud_score = features["fraud_score"]
+    fraud_flags = features["fraud_flags"]
+    flag_details = FraudFeatureExtractor.get_flag_details(tx_row, fraud_flags)
+
+    # If model is trained, use combined score
+    detector: FraudDetector = MODEL_CACHE.get("fraud_detector") or FraudDetector()
+    if detector.is_trained:
+        fraud_score, fraud_flags = detector.score_transaction(tx_row, prior_df)
+        flag_details = FraudFeatureExtractor.get_flag_details(tx_row, fraud_flags)
+
+    # Build baseline comparison from full history (excluding target tx)
+    all_except_target = history_df[history_df["id"] != tx_id]
+    avg_amount = float(all_except_target["amount"].mean()) if not all_except_target.empty else 0.0
+    tx_amount = float(target_tx.amount)
+    amount_ratio = round(tx_amount / avg_amount, 2) if avg_amount > 0 else 1.0
+
+    typical_countries = (
+        all_except_target["country"].value_counts().head(3).index.tolist()
+        if not all_except_target.empty else []
+    )
+    typical_channels = (
+        all_except_target["channel"].value_counts().head(3).index.tolist()
+        if not all_except_target.empty else []
+    )
+    typical_hours = (
+        all_except_target["time_of_day"].value_counts().head(3).index.tolist()
+        if not all_except_target.empty else []
+    )
+
+    baseline = BaselineComparison(
+        avg_amount=round(avg_amount, 2),
+        tx_amount=tx_amount,
+        amount_ratio=amount_ratio,
+        typical_countries=[str(c) for c in typical_countries],
+        tx_country=str(target_tx.country or ""),
+        typical_hours=[str(h) for h in typical_hours],
+        tx_hour=str(target_tx.time_of_day or ""),
+        typical_channels=[str(c) for c in typical_channels],
+        tx_channel=str(target_tx.channel or ""),
+    )
+
+    feature_vector = {
+        k: float(v)
+        for k, v in features.items()
+        if k not in ("fraud_score", "fraud_flags")
+    }
+
+    date_str = (
+        target_tx.date.strftime("%Y-%m-%d")
+        if hasattr(target_tx.date, "strftime")
+        else str(target_tx.date)
+    )
+
+    return FraudTransactionDetailResponse(
+        tx_id=tx_id,
+        customer_id=customer_id,
+        date=date_str,
+        amount=tx_amount,
+        mcc_category=str(target_tx.mcc_category or ""),
+        channel=str(target_tx.channel or ""),
+        country=str(target_tx.country or ""),
+        fraud_score=float(fraud_score),
+        fraud_flags=list(fraud_flags),
+        flag_details=[
+            FraudFlagDetail(
+                flag=d["flag"],
+                label=d["label"],
+                explanation=d["explanation"],
+                severity=d["severity"],
+            )
+            for d in flag_details
+        ],
+        feature_vector=feature_vector,
+        baseline_comparison=baseline,
+        model_status="trained" if detector.is_trained else "rule_based_only",
+    )
+
+
+@app.get(
+    "/api/ml/fraud/high-risk-transactions",
+    response_model=HighRiskTransactionsResponse,
+)
+async def get_high_risk_fraud_transactions(
+    limit: int = 50,
+    min_score: float = 0.5,
+    db: Session = Depends(get_db),
+) -> HighRiskTransactionsResponse:
+    """Get the highest-scoring fraud transactions across all customers.
+
+    Scores each customer's recent (30-day) transactions and returns the
+    top results sorted by fraud_score descending.
+
+    Args:
+        limit: Max transactions to return (default 50).
+        min_score: Minimum fraud score threshold (default 0.5).
+
+    Note: Slow on first call (~1s per customer). Results are not cached.
+    """
+    from .ml.fraud_model import FraudDetector
+
+    detector: FraudDetector = MODEL_CACHE.get("fraud_detector") or FraudDetector()
+    repo = CustomerRepository(db)
+    all_customers = repo.get_all(limit=None)
+
+    all_signals = []
+    for customer in all_customers:
+        try:
+            scored = detector.score_customer_recent(
+                customer_id=customer.id,
+                db=db,
+                days=30,
+                min_score=min_score,
+            )
+            customer_name = (
+                customer.persona_name.replace("_", " ")
+                if customer.persona_name else None
+            )
+            for s in scored:
+                all_signals.append(
+                    HighRiskTransactionItem(
+                        tx_id=s["tx_id"],
+                        customer_id=customer.id,
+                        customer_name=customer_name,
+                        date=s["date"],
+                        amount=s["amount"],
+                        mcc_category=s["mcc_category"],
+                        channel=s["channel"],
+                        country=s["country"],
+                        fraud_score=s["fraud_score"],
+                        fraud_flags=s["fraud_flags"],
+                        top_flag=s["top_factor"],
+                    )
+                )
+        except Exception as e:
+            logger.warning("Skipping customer %s in high-risk scan: %s", customer.id, e)
+            continue
+
+    all_signals.sort(key=lambda x: x.fraud_score, reverse=True)
+    top_signals = all_signals[:limit]
+
+    return HighRiskTransactionsResponse(
+        total_flagged=len(all_signals),
+        returned=len(top_signals),
+        min_score_filter=min_score,
+        model_status="trained" if detector.is_trained else "rule_based_only",
+        transactions=top_signals,
+    )
 
 
 # ============================================================================
