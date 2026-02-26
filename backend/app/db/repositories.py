@@ -1,7 +1,7 @@
 """Repository pattern for data access abstraction."""
 
 from typing import List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -284,7 +284,7 @@ class RiskProfileRepository:
             profile.risk_category = risk_category
             profile.primary_signal = primary_signal
             profile.recommended_action = recommended_action
-            profile.last_updated = datetime.utcnow()
+            profile.last_updated = datetime.now(timezone.utc)
         else:
             profile = CustomerRiskProfile(
                 customer_id=customer_id,

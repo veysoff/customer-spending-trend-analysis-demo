@@ -1,8 +1,8 @@
 """Database initialization with idempotent data generation."""
 
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .database import SessionLocal, create_tables
 from .models import Customer, Transaction
@@ -12,6 +12,34 @@ from ..ml.demo_personas import DEMO_PERSONAS_REGISTRY
 from .. import config
 
 logger = logging.getLogger(__name__)
+
+
+def _backfill_transaction_dates(db: Session) -> int:
+    """Backfill first/last transaction dates for customers where the field is NULL.
+
+    Idempotent: only touches rows where first_transaction_date IS NULL.
+    Returns the count of rows updated.
+    """
+    customers_missing = db.query(Customer).filter(
+        Customer.first_transaction_date.is_(None)
+    ).all()
+
+    updated = 0
+    for customer in customers_missing:
+        result = db.query(
+            func.min(Transaction.date), func.max(Transaction.date)
+        ).filter(Transaction.customer_id == customer.id).one()
+
+        if result[0] is not None:
+            customer.first_transaction_date = result[0]
+            customer.last_transaction_date = result[1]
+            updated += 1
+
+    if updated > 0:
+        db.commit()
+        logger.info(f"Backfilled first/last transaction dates for {updated} customers")
+
+    return updated
 
 
 def initialize_database():
@@ -59,12 +87,15 @@ def initialize_database():
             logger.info(f"Step 4/4: Pruning to demo set (keeping {config.DEMO_N_CUSTOMERS} background customers)...")
             _prune_to_demo_set(db, keep_count=config.DEMO_N_CUSTOMERS)
 
+            _backfill_transaction_dates(db)
             final_count = db.query(Customer).count()
             logger.info(f"✅ Initialization complete. DB has {final_count} customers.")
         else:
             logger.info(f"Database has {total_customers} customers. Skipping generation.")
             # Ensure model exists even if DB was pre-populated
             _ensure_model_trained(db)
+            # Backfill any NULL dates from older DB versions
+            _backfill_transaction_dates(db)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -121,10 +152,10 @@ def _generate_demo_personas(db: Session):
                 narrative=PersonaClass.NARRATIVE,
                 expected_risk_score=PersonaClass.EXPECTED_RISK_SCORE,
                 is_churned=is_churned,
-                generation_timestamp=datetime.utcnow(),
+                generation_timestamp=datetime.now(timezone.utc),
                 first_transaction_date=min(t['date'] for t in transactions) if transactions else None,
                 last_transaction_date=max(t['date'] for t in transactions) if transactions else None,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
 
             db.add(customer)
@@ -222,7 +253,7 @@ def _train_churn_model(db: Session):
     """
     from ..ml.churn_model import ChurnModelTrainer
 
-    model_path = Path(__file__).parent.parent / "ml" / "models" / "churn_model.pkl"
+    model_path = config.MODELS_DIR / "churn_model.pkl"
 
     if model_path.exists():
         logger.info(f"Churn model already exists at {model_path} — skipping training")
@@ -243,7 +274,7 @@ def _train_churn_model(db: Session):
 
 def _ensure_model_trained(db: Session):
     """Ensure churn model exists; train if missing (for pre-populated DBs)."""
-    model_path = Path(__file__).parent.parent / "ml" / "models" / "churn_model.pkl"
+    model_path = config.MODELS_DIR / "churn_model.pkl"
 
     if not model_path.exists():
         logger.info("Churn model missing. Training on existing DB data...")
@@ -360,10 +391,10 @@ def _generate_personas(db: Session):
             persona_seed=customer_id,
             narrative=PersonaClass.NARRATIVE,
             expected_risk_score=PersonaClass.EXPECTED_RISK_SCORE,
-            generation_timestamp=datetime.utcnow(),
+            generation_timestamp=datetime.now(timezone.utc),
             first_transaction_date=min(t['date'] for t in transactions) if transactions else None,
             last_transaction_date=max(t['date'] for t in transactions) if transactions else None,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         db.add(customer)

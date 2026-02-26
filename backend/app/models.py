@@ -65,6 +65,7 @@ class SHAPExplanation(BaseModel):
     confidence: Optional[float] = None
     top_drivers: List[str] = []
     shap_values: Dict[str, float] = {}
+    explainability_method: Optional[str] = None
 
 
 class AnomalyDetail(BaseModel):

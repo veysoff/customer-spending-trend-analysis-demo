@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import Generator, List, Optional
+from typing import List
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,14 +40,13 @@ MODEL_CACHE = {
 def load_cached_models():
     """Load ML models once and cache them in memory."""
     import pickle
-    from pathlib import Path
 
     if MODEL_CACHE["loaded"]:
         return MODEL_CACHE
 
     try:
-        model_path = Path(__file__).parent / "ml" / "models" / "churn_model.pkl"
-        scaler_path = Path(__file__).parent / "ml" / "models" / "feature_scaler.pkl"
+        model_path = config.MODELS_DIR / "churn_model.pkl"
+        scaler_path = config.MODELS_DIR / "feature_scaler.pkl"
 
         if model_path.exists() and scaler_path.exists():
             with open(model_path, "rb") as f:
@@ -95,17 +94,27 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint."""
+    """Health check endpoint with per-model status."""
     try:
         customer_count = CustomerRepository(db).get_customer_count()
-        return {"status": "healthy", "database_ready": True, "customer_count": customer_count}
+        xgboost_status = "loaded" if MODEL_CACHE.get("loaded") else "not_trained"
+        return {
+            "status": "healthy",
+            "database_ready": True,
+            "customer_count": customer_count,
+            "models": {
+                "xgboost_churn": xgboost_status,
+                "isolation_forest": "per_request",
+                "prophet": "per_request",
+            },
+        }
     except Exception as e:
         logger.error("Health check failed: %s", e, exc_info=True)
         return {"status": "unhealthy", "database_ready": False, "error": "Database unavailable"}
@@ -645,7 +654,7 @@ async def train_churn_model(db: Session = Depends(get_db)) -> ModelTrainingRespo
 
     Returns: Training results with metrics and timestamp
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     from .ml.churn_model import ChurnModelTrainer
 
     logger.info("Training churn prediction model...")
@@ -656,7 +665,7 @@ async def train_churn_model(db: Session = Depends(get_db)) -> ModelTrainingRespo
 
         if result["success"]:
             metrics = result["metrics"]
-            training_timestamp = datetime.utcnow().isoformat()
+            training_timestamp = datetime.now(timezone.utc).isoformat()
 
             logger.info(
                 "Model training successful - F1: %.4f, AUC: %.4f",
@@ -823,17 +832,14 @@ async def predict_all_customers_churn(
     Performance: <10s for 1000 customers
     """
     import pickle
-    import numpy as np
-    from pathlib import Path
-    from .ml.churn_features import ChurnFeatureEngineer
-    from .models import ChurnPredictionDetail
+    from .ml.churn_model import ChurnModelTrainer
 
     logger.info("Predicting churn for all customers...")
 
     try:
         # Load model and scaler
-        model_path = Path(__file__).parent / "ml" / "models" / "churn_model.pkl"
-        scaler_path = Path(__file__).parent / "ml" / "models" / "feature_scaler.pkl"
+        model_path = config.MODELS_DIR / "churn_model.pkl"
+        scaler_path = config.MODELS_DIR / "feature_scaler.pkl"
 
         if not model_path.exists() or not scaler_path.exists():
             raise HTTPException(
@@ -856,64 +862,51 @@ async def predict_all_customers_churn(
                 detail="No customers found in database"
             )
 
+        # Vectorized batch prediction: collects all features first, then single predict_proba() call
+        trainer = ChurnModelTrainer.__new__(ChurnModelTrainer)
+        trainer.model = model
+        trainer.scaler = scaler
+
+        batch_results = trainer.predict_batch(all_customers, db)
+        logger.info("Batch feature engineering complete: %d/%d customers succeeded", len(batch_results), len(all_customers))
+
         predictions_list = []
         churned_count = 0
         stable_count = 0
         total_probability = 0.0
 
-        for i, customer in enumerate(all_customers):
-            if (i + 1) % 100 == 0:
-                logger.info("Processed %d/%d customers", i + 1, len(all_customers))
+        for customer, prediction, probability, features_dict in batch_results:
+            churn_probability = float(probability[1])
 
-            try:
-                # Engineer features
-                features_dict = ChurnFeatureEngineer.engineer_churn_features(customer.id, db)
-                feature_names = list(features_dict.keys())
-                feature_values = [features_dict[name] for name in feature_names]
+            if prediction == 1:
+                churned_count += 1
+            else:
+                stable_count += 1
+            total_probability += churn_probability
 
-                # Scale and predict
-                X = pd.DataFrame([feature_values], columns=feature_names)
-                X_scaled = scaler.transform(X)
-                prediction = model.predict(X_scaled)[0]
-                probability = model.predict_proba(X_scaled)[0]
-                churn_probability = float(probability[1])
+            if churn_probability < 0.40:
+                batch_risk_tier = "low"
+            elif churn_probability < 0.70:
+                batch_risk_tier = "medium"
+            else:
+                batch_risk_tier = "high"
 
-                # Count results
-                if prediction == 1:
-                    churned_count += 1
-                else:
-                    stable_count += 1
-                total_probability += churn_probability
-
-                # Compute risk tier per requirements (low/medium/high)
-                if churn_probability < 0.40:
-                    batch_risk_tier = "low"
-                elif churn_probability < 0.70:
-                    batch_risk_tier = "medium"
-                else:
-                    batch_risk_tier = "high"
-
-                # Build prediction response
-                pred_response = ChurnPredictionResponse(
-                    customer_id=customer.id,
-                    churn_probability=churn_probability,
-                    churn_prediction="churned" if prediction == 1 else "stable",
-                    confidence=float(max(probability)),
-                    risk_tier=batch_risk_tier,
-                    top_5_factors=[],
-                    account_metrics={
-                        "credit_limit": float(customer.credit_limit or 0),
-                        "current_balance": float(customer.current_balance or 0),
-                        "utilization_ratio": float(features_dict.get("utilization_ratio", 0)),
-                        "dormancy_days": float(features_dict.get("dormancy_days", 0)),
-                        "inactive_months_count": float(features_dict.get("inactive_months_count", 0)),
-                    }
-                )
-                predictions_list.append(pred_response)
-
-            except Exception as e:
-                logger.warning("Failed to predict for customer %s: %s", customer.id, str(e))
-                continue
+            pred_response = ChurnPredictionResponse(
+                customer_id=customer.id,
+                churn_probability=churn_probability,
+                churn_prediction="churned" if prediction == 1 else "stable",
+                confidence=float(max(probability)),
+                risk_tier=batch_risk_tier,
+                top_5_factors=[],
+                account_metrics={
+                    "credit_limit": float(customer.credit_limit or 0),
+                    "current_balance": float(customer.current_balance or 0),
+                    "utilization_ratio": float(features_dict.get("utilization_ratio", 0)),
+                    "dormancy_days": float(features_dict.get("dormancy_days", 0)),
+                    "inactive_months_count": float(features_dict.get("inactive_months_count", 0)),
+                }
+            )
+            predictions_list.append(pred_response)
 
         # Sort by churn probability (descending)
         predictions_list.sort(key=lambda x: x.churn_probability, reverse=True)
@@ -1089,6 +1082,36 @@ async def get_customer_insights(
         )
 
 
+@app.delete("/api/customers/{customer_id}/insights/cache")
+async def invalidate_customer_insights_cache(
+    customer_id: str, db: Session = Depends(get_db)
+):
+    """Delete the cached AI narrative for a specific customer.
+
+    Use after retraining the churn model to force regeneration on next GET.
+    """
+    from .db.models import AIInterpretation
+
+    deleted = db.query(AIInterpretation).filter(
+        AIInterpretation.customer_id == customer_id
+    ).delete()
+    db.commit()
+    return {"deleted": deleted > 0, "customer_id": customer_id}
+
+
+@app.delete("/api/ml/insights/cache")
+async def invalidate_all_insights_cache(db: Session = Depends(get_db)):
+    """Delete all cached AI narratives across all customers.
+
+    Use after retraining the churn model to force fresh generation for all customers.
+    """
+    from .db.models import AIInterpretation
+
+    deleted_count = db.query(AIInterpretation).delete()
+    db.commit()
+    return {"deleted_count": deleted_count}
+
+
 @app.get("/api/ml/churn-model/feature-importance", response_model=FeatureImportanceResponse)
 async def get_feature_importance(db: Session = Depends(get_db)) -> FeatureImportanceResponse:
     """Get feature importance ranking from trained churn model.
@@ -1108,14 +1131,13 @@ async def get_feature_importance(db: Session = Depends(get_db)) -> FeatureImport
     """
     import pickle
     import json
-    from pathlib import Path
 
     logger.info("Retrieving feature importance from trained model...")
 
     try:
         # Load model and metrics
-        model_path = Path(__file__).parent / "ml" / "models" / "churn_model.pkl"
-        metrics_path = Path(__file__).parent / "ml" / "models" / "metrics.json"
+        model_path = config.MODELS_DIR / "churn_model.pkl"
+        metrics_path = config.MODELS_DIR / "metrics.json"
 
         if not model_path.exists():
             raise HTTPException(

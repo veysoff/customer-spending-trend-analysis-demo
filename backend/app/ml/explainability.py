@@ -79,7 +79,8 @@ class ExplainabilityEngine:
             "anomaly_type": anomaly_type,
             "confidence": min(1.0, anomaly_score),
             "top_drivers": drivers,
-            "shap_values": {}
+            "shap_values": {},
+            "explainability_method": "weighted_approximation",
         }
 
     @staticmethod
