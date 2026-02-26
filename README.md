@@ -1,13 +1,15 @@
 # Customer Spending Trend Analysis — ML PoC
 
-AI-powered banking analytics platform for detecting customer spending trends, anomalies, and churn risk.
+AI-powered banking analytics platform for detecting customer spending trends, behavioral anomalies, churn risk, and fraudulent transactions.
 
 ## 🎯 What It Does
 
-- 📊 **Trend Forecasting** — Predicts customer spending patterns using Prophet
-- 🚨 **Anomaly Detection** — Flags risky behavior using Isolation Forest
-- 💡 **Explainability** — Shows why each prediction matters using SHAP
-- 🎨 **Interactive Dashboard** — Visualize insights in real-time via Vue.js
+- 📊 **Trend Forecasting** — Predicts customer spending patterns using Prophet (UC-1)
+- 🚨 **Anomaly Detection** — Flags risky behavior using Isolation Forest (UC-1)
+- 💼 **Churn Prediction** — Identifies at-risk customers using XGBoost (UC-2)
+- 🔍 **Fraud Detection** — Detects suspicious transactions with ML pattern recognition (UC-3)
+- 💡 **Explainability** — Shows why each prediction matters using SHAP (UC-2) and feature analysis (UC-3)
+- 🎨 **Interactive Dashboard** — Visualize insights in real-time via Vue.js 3
 
 ## 🚀 Quick Start (Docker)
 
@@ -27,13 +29,18 @@ docker-compose up --build
 That's it! The application will **automatically**:
 
 1. ✅ Build backend & frontend containers
-2. ✅ Create SQLite database schema (`backend/data/spending.db`)
-3. ✅ Generate 40 named demo personas with transaction histories
-4. ✅ **Train & cache ML models** (Prophet, Isolation Forest, XGBoost)
-5. ✅ Start API on `http://localhost:8000`
-6. ✅ Start Dashboard on `http://localhost:3000`
+2. ✅ Create SQLite database schema with fraud detection columns (`backend/data/spending.db`)
+3. ✅ Generate 1000 customers with 335k+ transactions (22 named personas + synthetic patterns)
+4. ✅ Inject fraud patterns into ~5% of background customers for testing
+5. ✅ **Cache ML models ready for training** (Prophet, Isolation Forest, XGBoost, Fraud Detector)
+6. ✅ Start API on `http://localhost:8000`
+7. ✅ Start Dashboard on `http://localhost:3000`
 
-**First run takes 2-3 minutes** (generation + training). Subsequent restarts take ~10 seconds (models load from cache).
+**First run takes 2-3 minutes** (generation + indexing). Subsequent restarts take ~10 seconds (models load from cache).
+
+**Important**: Before using churn or fraud predictions, train the models:
+- **Churn**: `POST /api/ml/train-churn-model` (via API or dashboard)
+- **Fraud**: `POST /api/ml/train-fraud-model` (via API or dashboard)
 
 ### Access the Application
 
@@ -73,25 +80,29 @@ docker-compose logs -f
 
 **What happens automatically on first run:**
 
-1. **Database Generation** (~60 seconds)
-   - 40 named demo personas (with specific behavioral patterns, ~150 transactions each)
-   - ~6,000 transactions total from all personas
-   - Created in SQLite with indexed queries
+1. **Database Generation** (~80 seconds)
+   - 1000 total customers (22 named personas + 978 synthetic background)
+   - 335,802 transactions across all customers
+   - Fraud patterns injected into ~50 customers (~5%) for realistic testing
+   - SQLite with indexed queries
 
-2. **Model Training** (~90 seconds)
-   - **Prophet**: Trend forecasting model trained per customer
-   - **Isolation Forest**: Anomaly detection on spending patterns
-   - **XGBoost**: Churn prediction classifier
-   - Models cached in memory for fast inference
+2. **Fraud Pattern Injection** (~20 seconds)
+   - Geo jumps (unusual country changes)
+   - Card testing (small amounts followed by large purchases)
+   - Night clusters (transactions in unusual hours)
+   - Merchant drift (category pattern changes)
 
-3. **Database Indexing** (~30 seconds)
+3. **Database Indexing & Setup** (~30 seconds)
    - Customer lookups optimized
    - Transaction queries indexed
+   - Fraud columns added idempotently
 
 **Subsequent restarts**: ~10 seconds
 - Database already exists → skip generation
-- Models cached in memory → load instantly
+- Models load from cache → instant
 - API starts immediately
+
+**Note**: Churn and Fraud models must be trained manually via API (see "Training Models" section below)
 
 ---
 
@@ -114,50 +125,64 @@ SQLite Database + ML Pipeline
      ├─ YES → Load database + models (10 seconds)
      └─ NO → Go to step 3
      ↓
-3. Generate 40 demo personas with transaction histories (~6k transactions total)
+3. Generate 1000 customers with 335k+ transactions
+     ├─ 22 named demo personas
+     ├─ 978 synthetic background customers
+     └─ ~5% have injected fraud patterns
      ↓
-4. Train ML models on generated data:
-     ├─ Prophet: Learns spending trends for each customer
-     ├─ Isolation Forest: Learns anomaly patterns
-     └─ XGBoost: Learns churn prediction (binary classifier)
+4. Add fraud detection columns & indexes
      ↓
-5. Cache models in memory for fast inference
+5. Load ML models (ready for training)
+     ├─ Prophet: Available per-customer
+     ├─ Isolation Forest (anomalies): Available per-customer
+     ├─ XGBoost: Ready to train via API
+     └─ Fraud Detector (IF + rules): Ready to train via API
      ↓
 6. API ready ✅ (takes 2-3 minutes total)
+     ↓
+7. Train models via POST endpoints (optional)
+     ├─ POST /api/ml/train-churn-model
+     └─ POST /api/ml/train-fraud-model
 ```
 
-**All models are trained on first startup, then cached:**
-- Models are saved to `backend/data/*.pkl` files
+**Models trained on demand:**
+- Models are saved to `backend/data/models/*.pkl` files
 - On restart, cached models load in <1 second
-- No retraining needed unless database is deleted
+- Training is required before using predictions (graceful fallback to rule-based scoring if not trained)
 
 ---
 
 ## 📊 What Gets Generated Automatically
 
 ### Synthetic Customer Data
-- **40 named demo personas** with diverse, realistic behavioral patterns
-- **~6,000 transactions** across all personas (24 months per persona)
-- **Stored in SQLite** (`backend/data/spending.db`, ~2-3 MB)
+
+- **1000 total customers** (22 named personas + 978 synthetic background)
+- **335,802 transactions** across all customers (12 months history)
+- **~5% fraud patterns** injected into background customers
+- **Stored in SQLite** (`backend/data/spending.db`, ~10-15 MB)
 - **Deterministic** — Same data on each run (seed-based generation)
 
-### Example Demo Personas
-- `STABLE_John` — Normal spending, low risk ✅
-- `CHURN_Sarah` — Declining spending, high churn risk 🔴
-- `ANOMALY_Mark` — Risky patterns (gambling, night transactions) ⚠️
-- `GROWTH_Tech` — Consistent growth, stable ✅
-- `MULE_Account` — Money laundering simulation (fraud detection test) 🔴
-- ... 35 more edge cases
+### Example Demo Personas (Named)
 
-### Trained Models (Cached)
-All models are **trained automatically** on first startup and cached:
+- `persona_john_stable` — Normal spending, low risk ✅
+- `persona_sarah_churn` — Declining spending, high churn risk 🔴
+- `persona_mark_anomaly` — Risky patterns (gambling, night transactions) ⚠️
+- `persona_tech_growth` — Consistent growth, stable ✅
+- `persona_julia_geographicanomaly` — Frequent country changes, fraud test 🔴
+- ... 17 more personas with specific patterns
+
+### ML Models (Load-on-demand)
+
+All models are **available for training** and cached after first training:
 
 - **Prophet** — Trend forecasting (learns spending patterns per customer)
-- **Isolation Forest** — Anomaly detection (identifies unusual spending)
-- **XGBoost** — Churn prediction classifier (binary: churned or not)
-- **SHAP** — Feature importance explanations
+- **Isolation Forest (UC-1)** — Per-customer anomaly detection on spending
+- **Isolation Forest (UC-3)** — Global fraud detection on transactions (200 estimators, 5% contamination)
+- **XGBoost** — Churn prediction classifier (15 features, binary classification)
+- **Rule-based Engine** — Fraud flags (geo_risk, card_testing, structuring, night_activity, merchant_drift, channel_anomaly, amount_spike, high_velocity)
+- **SHAP** — Feature importance explanations (UC-2 churn, custom weights for UC-1)
 
-Models are pickled to `backend/data/` and loaded in <1 second on subsequent restarts.
+Models are pickled to `backend/data/models/` after training and load in <1 second on subsequent restarts.
 
 ---
 
@@ -199,109 +224,228 @@ VITE_API_URL=http://localhost:8000
 
 ```
 .
-├── backend/                    # FastAPI application
+├── backend/                              # FastAPI application
 │   ├── app/
-│   │   ├── main.py            # REST API endpoints
-│   │   ├── config.py          # Configuration
-│   │   ├── models.py          # Pydantic schemas
-│   │   ├── db/                # Database layer
-│   │   │   ├── models.py      # SQLAlchemy ORM
-│   │   │   ├── database.py    # Engine & sessions
-│   │   │   ├── init_db.py     # Auto-initialization
-│   │   │   └── repositories.py
-│   │   └── ml/                # Machine learning
-│   │       ├── data_generator.py
-│   │       ├── feature_engineering.py
-│   │       ├── trend_detection.py
-│   │       ├── anomaly_detection.py
-│   │       ├── churn_features.py
-│   │       ├── churn_model.py
-│   │       └── narrative_engine.py
-│   ├── data/                  # Generated database & models
+│   │   ├── main.py                      # REST API endpoints (4 sections: core, UC-1, UC-2, UC-3)
+│   │   ├── config.py                    # Configuration & settings
+│   │   ├── models.py                    # Pydantic response schemas
+│   │   ├── db/                          # Database layer
+│   │   │   ├── models.py                # SQLAlchemy ORM (Customer, Transaction, RiskProfile)
+│   │   │   ├── database.py              # Engine & session factory
+│   │   │   ├── init_db.py               # Auto-initialization + fraud column migration
+│   │   │   └── repositories.py          # CustomerRepository, TransactionRepository
+│   │   └── ml/                          # Machine learning
+│   │       ├── data_generator.py        # Synthetic data generation (1000 customers)
+│   │       ├── feature_engineering.py   # UC-1 trend features (15 features)
+│   │       ├── trend_detection.py       # Prophet integration
+│   │       ├── anomaly_detection.py     # UC-1 Isolation Forest
+│   │       ├── fraud_features.py        # UC-3 fraud features (8 features)
+│   │       ├── fraud_model.py           # UC-3 FraudDetector (IF + rule-based)
+│   │       ├── churn_features.py        # UC-2 churn features (15 features)
+│   │       ├── churn_model.py           # UC-2 XGBoost model
+│   │       ├── explainability.py        # SHAP integrations
+│   │       └── narrative_engine.py      # AI insights text generation
+│   ├── data/                            # Generated database & model artifacts
+│   │   ├── spending.db                  # SQLite (auto-generated, ~10-15 MB)
+│   │   └── models/                      # Pickled models (.pkl)
+│   ├── tests/                           # Unit & integration tests
+│   │   └── test_fraud_detection.py      # 22 tests for UC-3
 │   ├── requirements.txt
 │   └── Dockerfile
 │
-├── frontend/                  # Vue.js 3 dashboard
+├── frontend/                            # Vue.js 3 dashboard
 │   ├── src/
-│   │   ├── components/        # Vue components
-│   │   ├── stores/            # Pinia state management
-│   │   ├── services/          # API client
-│   │   └── App.vue
+│   │   ├── components/                  # Vue components
+│   │   │   ├── Dashboard.vue            # UC-1 customer profile
+│   │   │   ├── TrendChart.vue           # UC-1 Prophet forecast
+│   │   │   ├── AnomalyAlert.vue         # UC-1 anomalies
+│   │   │   ├── ChurnPredictionCard.vue  # UC-2 risk gauge
+│   │   │   ├── FeatureImportanceChart.vue # UC-2 SHAP explanations
+│   │   │   ├── HighRiskTable.vue        # UC-2 high-risk customers
+│   │   │   ├── FraudSignalsTable.vue    # UC-3 fraud signals (new)
+│   │   │   ├── FraudTransactionDetail.vue # UC-3 detail modal (new)
+│   │   │   ├── AIInsightsPanel.vue      # AI narrative
+│   │   │   └── ErrorBoundary.vue        # Error handling
+│   │   ├── stores/                      # Pinia state management
+│   │   │   └── customer.js              # Global customer state + fraud signals
+│   │   ├── services/                    # API client
+│   │   │   └── api.js                   # Axios wrapper (all UC endpoints)
+│   │   └── App.vue                      # Root: tab navigation
 │   ├── package.json
 │   └── Dockerfile
 │
-├── documents/                 # Technical documentation
-│   ├── core/                  # Specifications
-│   ├── phases/                # Phase completion reports
-│   └── guides/                # How-to guides
-│
-├── docker-compose.yml         # Container orchestration
-└── README.md                  # This file
+├── docker-compose.yml                   # Container orchestration
+├── .gitignore                           # Excludes .claude/, docs/, backend/data/
+├── README.md                            # This file
+└── CHANGELOG.md                         # Version history
 ```
 
 ---
 
 ## 🔌 API Endpoints
 
+### Core Endpoints
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Service health check |
+| `/health` | GET | Service health check + model status |
 | `/api/customers/{id}` | GET | Customer profile with risk score |
-| `/api/customers/{id}/trends` | GET | Spending forecast with confidence intervals |
-| `/api/customers/{id}/anomalies` | GET | Detected anomalies with SHAP explanations |
-| `/api/customers/{id}/insights` | GET | AI narrative analysis |
-| `/api/customers/risk/high` | GET | List high-risk customers |
-| `/api/personas` | GET | List all personas |
+| `/api/customers` | GET | List all customers (1000 total) |
+| `/api/personas` | GET | List demo personas (22 named) |
+
+### UC-1: Spending Trends & Anomalies
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/customers/{id}/trends` | GET | Spending forecast with Prophet predictions |
+| `/api/customers/{id}/anomalies` | GET | Detected anomalies with Isolation Forest |
+
+### UC-2: Churn Prediction
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/customers/{id}/churn-prediction` | GET | Churn risk score + SHAP explanations |
+| `/api/customers/risk/high` | GET | List high-risk customers (churn) |
+| `/api/ml/train-churn-model` | POST | Train/retrain XGBoost churn model |
+| `/api/ml/predict-all-churn` | POST | Batch churn predictions (slow) |
+| `/api/ml/churn-model/feature-importance` | GET | Top churn prediction factors |
+
+### UC-3: Fraud Detection
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/customers/{id}/fraud-signals` | GET | List flagged transactions (min_score, days filters) |
+| `/api/customers/{id}/fraud-signals/{tx_id}` | GET | Fraud detail + feature vector + baseline comparison |
+| `/api/ml/fraud/high-risk-transactions` | GET | Portfolio view: all high-risk transactions sorted by score |
+| `/api/ml/train-fraud-model` | POST | Train Isolation Forest + rule-based fraud model |
+
+### AI Insights & Documentation
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/customers/{id}/insights` | GET | AI narrative analysis (7-day cached) |
 | `/docs` | GET | Interactive API documentation (Swagger UI) |
+
+**Training Models (Required for Churn & Fraud Predictions)**
+
+Before using churn or fraud predictions, train the models via these endpoints:
+
+```bash
+# Train churn prediction model
+curl -X POST http://localhost:8000/api/ml/train-churn-model
+
+# Train fraud detection model
+curl -X POST http://localhost:8000/api/ml/train-fraud-model
+
+# Check model status
+curl http://localhost:8000/health
+```
 
 **Example API Call:**
 ```bash
-curl http://localhost:8000/api/customers/customer_000000
+curl http://localhost:8000/api/customers/persona_john_stable
 ```
 
 Response:
 ```json
 {
-  "customer_id": "customer_000000",
-  "risk_score": 0.15,
-  "risk_category": "LOW",
-  "trend_slope": 0.002,
-  "spending_volatility": 0.04
+  "customer_id": "persona_john_stable",
+  "name": "John (Stable)",
+  "current_monthly_spending": 5234.50,
+  "spending_trend": "STABLE",
+  "total_transactions": 342,
+  "behavior_flags": []
 }
 ```
+
+**Example Fraud Signals (After Training):**
+```bash
+curl "http://localhost:8000/api/customers/persona_julia_geographicanomaly/fraud-signals?days=30&min_score=0.3"
+```
+
+Response shows flagged transactions with fraud_score and fraud_flags (geo_risk, card_testing, etc.)
 
 ---
 
 ## 🧠 ML Pipeline
 
-**Data Generation** (Synthetic personas with realistic patterns)
-  ↓
-**Feature Engineering** (15 features: spending trends, volatility, categories, etc.)
-  ↓
-**Model Training** (Prophet, Isolation Forest, XGBoost)
-  ↓
-**Explainability** (SHAP values show top contributing features)
-  ↓
-**Risk Scoring** (6 categories: STABLE, MONITORING, AT_RISK, DECLINE, SILENT_CHURN, ACTIVE_CHURN)
+```
+Data Generation (1000 customers, 335k+ transactions, ~5% fraud)
+    ↓
+UC-1: Spending Trends & Anomalies
+├─ Feature Engineering (15 features: trends, volatility, diversity, temporal)
+├─ Prophet: Forecasts spending 12 months forward
+├─ Isolation Forest: Per-customer anomaly detection
+└─ Custom SHAP-style: Risk score explainability
 
-**Features Used:**
-- Monthly spending trends
+UC-2: Churn Prediction
+├─ Feature Engineering (15 features: credit metrics + spending)
+├─ XGBoost: Binary classifier (stable vs churned)
+├─ SHAP TreeExplainer: Top 5 factors per prediction
+└─ Risk Tiers: LOW / MEDIUM / HIGH
+
+UC-3: Fraud Detection
+├─ Feature Engineering (8 features: geo, time, amount, velocity, merchant, channel)
+├─ Isolation Forest: Global transaction anomaly detection (200 estimators)
+├─ Rule-based Engine: 8 fraud flags (geo_risk, card_testing, structuring, etc.)
+├─ Composite Score: 60% IF + 40% rule-based
+└─ Graceful Fallback: Rule-based only until model training
+```
+
+**UC-1 Features Used (Spending Trends):**
+- Monthly spending trends & forecasts
 - Transaction frequency & amounts
 - Category diversification
 - Temporal patterns (day/night, weekday/weekend)
-- Payment delays & compliance
+- Channel usage (online/POS/ATM)
 - Account age & dormancy
+
+**UC-2 Features Used (Churn Prediction):**
+- Credit metrics (limit, utilization, balance)
+- Spending trends (slope, volatility, growth)
+- Transaction patterns (frequency, recency)
+- Account tenure & engagement
+- Behavioral changes (migration, spike detection)
+
+**UC-3 Features Used (Fraud Detection):**
+- Geographic risk (country changes, new locations)
+- Night activity (transactions in unusual hours)
+- Card testing (micro-transactions before large amounts)
+- Structuring (multiple small sequential amounts)
+- Amount spike (deviation from customer baseline)
+- High velocity (transaction count in time window)
+- Merchant drift (category changes in history)
+- Channel anomaly (unusual channel usage)
 
 ---
 
 ## 📊 Dashboard Features
 
-- **Customer Profile** — View individual customer details
-- **Spending Trends** — Prophet forecast with confidence intervals
-- **Anomaly Alerts** — Detect unusual patterns
-- **Risk Ranking** — See high-risk customers
-- **AI Insights** — Professional narrative explaining predictions
-- **SHAP Explainability** — Understand what drives each score
+### UC-1: Spending Trends & Behavior
+- **Customer Profile** — View customer details, spending baseline, transaction count
+- **Spending Trends Chart** — Prophet 12-month forecast with confidence intervals
+- **Anomaly Alerts** — Flag unusual spending patterns with severity
+- **Behavior Flags** — Channel migration, declining diversity, spending spikes, silent churn
+- **Rolling Averages** — 7-day, 30-day, 90-day spending trends
+
+### UC-2: Churn Prediction
+- **Churn Risk Gauge** — Real-time probability score (0-100%)
+- **Risk Tier** — LOW / MEDIUM / HIGH classification
+- **SHAP Explanations** — Top 5 factors driving churn risk
+- **High-Risk Customers Table** — Sortable list with risk categories
+- **Feature Importance Chart** — All 15 engineered features and their weights
+
+### UC-3: Fraud Detection (New)
+- **Fraud Signals Table** — Flagged transactions with color-coded scores
+- **Transaction Detail Panel** — Full feature vector + baseline comparison
+- **Fraud Flags** — Visual tags (geo_risk, card_testing, night_activity, etc.)
+- **Portfolio View** — High-risk transactions across all customers (sorted by score)
+- **Prior History Stats** — Mean/max fraud scores for customer context
+
+### General
+- **AI Insights** — Professional narrative explaining all predictions (cached 7 days)
+- **Model Status** — See which models are trained vs. rule-based only
+- **Responsive Design** — Works on desktop, tablet, mobile
 
 ---
 
@@ -387,42 +531,62 @@ pytest tests/ -v --cov=app
 
 ## 🛠️ Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Backend | FastAPI (Python 3.11) |
-| Frontend | Vue.js 3 + Tailwind CSS |
-| Database | SQLite + SQLAlchemy ORM |
-| Trends | Prophet |
-| Anomalies | Scikit-learn Isolation Forest |
-| Churn | XGBoost |
-| Explainability | SHAP |
-| Charts | ApexCharts |
-| Container | Docker + Docker Compose |
+| Layer | Technology |
+|-------|-----------|
+| **Backend API** | FastAPI (Python 3.11) + Uvicorn |
+| **Frontend** | Vue.js 3 (Composition API) + Pinia + Vite |
+| **Styling** | Tailwind CSS + Headless UI |
+| **Database** | SQLite (SQLAlchemy 2.0 ORM) |
+| **ML: Trends (UC-1)** | Prophet (Facebook) - time series forecasting |
+| **ML: Anomalies (UC-1)** | Scikit-learn Isolation Forest - per-customer |
+| **ML: Churn (UC-2)** | XGBoost - binary classifier (15 features) |
+| **ML: Fraud (UC-3)** | Scikit-learn Isolation Forest (global) + rule-based hybrid |
+| **Explainability** | SHAP (TreeExplainer for XGBoost, custom weights for others) |
+| **Charts** | ApexCharts |
+| **Containerization** | Docker + Docker Compose (multi-stage builds) |
+| **Web Server** | nginx (frontend static serving + reverse proxy) |
 
 ---
 
 ## ❓ FAQ
 
 **Q: How long does first startup take?**
-A: 2-3 minutes. It's generating 40 demo personas with transactions, creating database indexes, and training ML models.
+A: 2-3 minutes. It generates 1000 customers (335k+ transactions), creates database indexes, and prepares ML models for training.
+
+**Q: Do I need to train the models?**
+A: Yes, for churn & fraud predictions. Use the dashboard "Train Model" buttons or API endpoints (`POST /api/ml/train-churn-model`, `POST /api/ml/train-fraud-model`). Before training, endpoints return rule-based scores only.
 
 **Q: Can I use real data instead of synthetic?**
-A: Yes. Modify `backend/app/db/init_db.py` to load from your data source instead of the persona generator.
+A: Yes. Modify `backend/app/db/init_db.py` to load from your data source instead of the persona generator. Fraud patterns will still be injected for testing.
 
 **Q: What database is used?**
 A: SQLite for simplicity. For production, migrate to PostgreSQL (no code changes needed thanks to SQLAlchemy).
 
 **Q: Are the synthetic personas reproducible?**
-A: Yes. Seed-based generation means the same customers are created on each run.
+A: Yes. Seed-based generation means the same 1000 customers are created on each run (22 named personas + 978 synthetic background).
 
-**Q: Can I add more personas?**
-A: Yes. Edit `backend/app/ml/data_generator.py` to add new generator classes.
+**Q: Can I add more personas or customers?**
+A: Yes. Edit `backend/app/ml/data_generator.py` to modify `n_customers`, add new persona classes, or adjust fraud injection percentage (~5%).
+
+**Q: What's the fraud detection accuracy?**
+A: The Isolation Forest is trained on real patterns (not labeled), so evaluation is qualitative. Rule-based flags (geo_risk, card_testing, structuring) provide interpretable signals. Combine both for best results.
 
 **Q: How do I reset the database?**
-A: `docker-compose down -v && rm -rf backend/data/spending.db && docker-compose up`
+A:
+```bash
+docker-compose down -v
+rm -rf backend/data/spending.db backend/data/models/
+docker-compose up --build
+```
 
 **Q: What's the difference between development and production?**
-A: Development uses SQLite & in-memory caching. Production should use PostgreSQL, Redis, and horizontal scaling.
+A: Development uses SQLite & in-memory caching. Production should use PostgreSQL, Redis, async task queues (Celery), and horizontal scaling.
+
+**Q: Can I export fraud or churn predictions?**
+A: Yes, via the API. Use batch endpoints (`POST /api/ml/predict-all-churn`) or high-risk endpoints (`GET /api/ml/fraud/high-risk-transactions`). Parse JSON and export to CSV/Excel as needed.
+
+**Q: How long does model training take?**
+A: XGBoost churn model: ~30 seconds. Isolation Forest fraud model: ~10 seconds. Both are done in-process (blocking request). For async training, use a task queue (Celery/RQ).
 
 ---
 
