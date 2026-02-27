@@ -25,10 +25,11 @@ class SyntheticDataGenerator:
                  "McDonald's", "Boots", "John Lewis", "Argos", "Next", "M&S"]
     COUNTRIES = ["GB", "US", "FR", "DE", "ES"]
 
-    def __init__(self, n_customers: int = 1000, n_months: int = 12, seed: int = 42):
+    def __init__(self, n_customers: int = 1000, n_months: int = 12, seed: int = 42, customer_id_offset: int = 0):
         self.n_customers = n_customers
         self.n_months = n_months
         self.seed = seed
+        self.customer_id_offset = customer_id_offset
         # Use a local random generator to avoid affecting global numpy state
         self.rng = np.random.default_rng(seed)
         # Calculate start date: n_months ago from today
@@ -243,8 +244,9 @@ class SyntheticDataGenerator:
         records = []
 
         for cust_idx in range(self.n_customers):
-            customer_id = f"customer_{cust_idx:06d}"
+            customer_id = f"customer_{(cust_idx + self.customer_id_offset):06d}"
             pattern = self._get_pattern_type(cust_idx)
+            tx_counter = 0  # Local transaction counter per customer
 
             # Track transactions for lifestyle shift category change
             month_mccs = {m: [] for m in range(1, self.n_months + 1)}
@@ -280,7 +282,7 @@ class SyntheticDataGenerator:
                     date_obj = datetime(year, month_num, safe_day, hour, minute)
 
                     tx_dict = {
-                        "transaction_id": str(uuid.uuid4()),
+                        "transaction_id": None,  # Will be assigned after sorting in save_to_db
                         "customer_id": customer_id,
                         "date": date_obj.strftime("%Y-%m-%d"),
                         "amount": round(amount, 2),
@@ -444,11 +446,24 @@ class SyntheticDataGenerator:
         db_session.bulk_save_objects(customers_to_insert)
         db_session.commit()
 
+        # Assign transaction IDs after sorting
+        tx_counter_by_customer = {}
+        transaction_ids = []
+        for _, row in df.iterrows():
+            cust_id = row["customer_id"]
+            if cust_id not in tx_counter_by_customer:
+                tx_counter_by_customer[cust_id] = 0
+            tx_id = f"bg-{cust_id}-{tx_counter_by_customer[cust_id]}"
+            tx_counter_by_customer[cust_id] += 1
+            transaction_ids.append(tx_id)
+
+        df["id"] = transaction_ids
+
         # Insert transactions in batches
         transactions_batch = []
         for _, row in df.iterrows():
             transaction_dict = {
-                "id": row["transaction_id"],
+                "id": row["id"],
                 "customer_id": row["customer_id"],
                 "date": row["date"],
                 "amount": row["amount"],

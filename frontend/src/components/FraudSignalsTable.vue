@@ -75,7 +75,7 @@
             <tbody class="divide-y divide-gray-200">
               <tr v-for="(signal, idx) in filteredSignals" :key="idx" class="hover:bg-gray-50">
                 <td class="py-3 px-4 text-sm">
-                  {{ formatDate(signal.transaction_date) }}
+                  {{ formatDate(signal.date) }}
                 </td>
                 <td class="py-3 px-4 text-sm font-medium">
                   AED {{ signal.amount.toFixed(2) }}

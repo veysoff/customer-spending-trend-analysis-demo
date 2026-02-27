@@ -242,7 +242,8 @@ def _generate_synthetic_data_with_churn(db: Session, n_customers: int = None, ba
     )
 
     # Generate synthetic data using calculated values
-    generator = SyntheticDataGenerator(n_customers=n_to_generate, n_months=config.N_MONTHS, seed=42)
+    # Use offset=55 to avoid collision with 55 demo personas (customer_000001 to customer_000055)
+    generator = SyntheticDataGenerator(n_customers=n_to_generate, n_months=config.N_MONTHS, seed=123, customer_id_offset=55)
 
     logger.info("Saving synthetic data to database...")
     generator.save_to_db(db)
