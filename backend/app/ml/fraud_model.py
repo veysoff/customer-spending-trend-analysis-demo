@@ -7,7 +7,9 @@ Rule-based flags from FraudFeatureExtractor are combined with IF scores at infer
 import json
 import logging
 import pickle
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -20,6 +22,30 @@ from ..db.models import Customer, Transaction
 from .fraud_features import FraudFeatureExtractor
 
 logger = logging.getLogger(__name__)
+
+
+def _prune_model_versions(directory: Path, prefix: str, keep: int) -> None:
+    """Delete all but the `keep` most recent versioned model files matching `prefix*`.
+
+    Args:
+        directory: Directory containing versioned model files
+        prefix: File prefix to match (e.g., "fraud_detector_")
+        keep: Number of most recent versions to retain
+    """
+    try:
+        # Collect all pkl and json files matching the prefix
+        pkl_files = sorted(directory.glob(f"{prefix}*.pkl"), key=lambda p: p.stat().st_mtime)
+        json_files = sorted(directory.glob(f"{prefix}*.json"), key=lambda p: p.stat().st_mtime)
+
+        # Combine and deduplicate, then sort by modification time
+        all_files = sorted(set(pkl_files + json_files), key=lambda p: p.stat().st_mtime)
+
+        # Delete all but the most recent `keep` files
+        for old_file in all_files[:-keep]:
+            old_file.unlink(missing_ok=True)
+            logger.info(f"Pruned old model version: {old_file.name}")
+    except Exception as e:
+        logger.warning(f"Error pruning model versions: {e}")
 
 
 class FraudDetector:
@@ -66,11 +92,30 @@ class FraudDetector:
             logger.warning(f"Failed to load fraud model: {e}")
 
     def save(self) -> None:
-        """Persist trained model to disk."""
+        """Persist trained model to disk with timestamped versioning.
+
+        Creates a timestamped versioned copy and updates the "latest" pointer file.
+        Automatically prunes old versions, keeping only the 3 most recent.
+        """
         config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(self.MODEL_PATH, "wb") as f:
+
+        # Generate timestamp for this version
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+        # Define versioned file path
+        versioned_path = config.MODELS_DIR / f"fraud_detector_{ts}.pkl"
+
+        # Save versioned model
+        with open(versioned_path, "wb") as f:
             pickle.dump({"model": self.model}, f)
-        logger.info(f"Fraud model saved to {self.MODEL_PATH}")
+        logger.info(f"Fraud model saved to versioned file: {versioned_path.name}")
+
+        # Update "latest" pointer file (this is what the inference code uses)
+        shutil.copy2(versioned_path, self.MODEL_PATH)
+        logger.info(f"Latest pointer updated (version {ts})")
+
+        # Prune old versions, keeping only the 3 most recent
+        _prune_model_versions(config.MODELS_DIR, prefix="fraud_detector_", keep=3)
 
     # ------------------------------------------------------------------
     # Training

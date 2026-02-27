@@ -56,6 +56,210 @@ class ChurnFeatureEngineer:
 
         return features
 
+    @staticmethod
+    def engineer_churn_features_bulk(customers: List, db: Session) -> Dict[str, Dict[str, float]]:
+        """Bulk feature engineering: single DB query for all transactions, then distribute.
+
+        Optimizes for batch processing by loading all transactions once instead of
+        making N separate queries for N customers. Reduces DB roundtrips from ~105 to 1.
+
+        Args:
+            customers: List of Customer ORM objects to calculate features for
+            db: Database session
+
+        Returns:
+            Dictionary mapping customer_id → features_dict (same format as engineer_churn_features)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        customer_ids = [c.id for c in customers]
+        if not customer_ids:
+            return {}
+
+        # OPTIMIZATION: Single DB query for all transactions for all customers
+        rows = db.query(Transaction).filter(
+            Transaction.customer_id.in_(customer_ids)
+        ).all()
+
+        # Group transactions by customer_id into lists for DataFrame building
+        tx_map: Dict[str, List] = {cid: [] for cid in customer_ids}
+        for tx in rows:
+            if tx.customer_id in tx_map:
+                tx_map[tx.customer_id].append({
+                    "date": tx.date,
+                    "amount": tx.amount,
+                    "mcc_category": tx.mcc_category,
+                    "channel": tx.channel,
+                })
+
+        # Calculate features for each customer using pre-loaded transaction data
+        results = {}
+        for customer in customers:
+            cid = customer.id
+            try:
+                # Build DataFrame from pre-loaded transactions
+                df = pd.DataFrame(tx_map.get(cid, []))
+
+                # Calculate features without additional DB queries (except for non-transaction data)
+                features = {}
+
+                # UC-1 Features (7 trends) - calculated from pre-loaded df
+                features["trend_slope"] = ChurnFeatureEngineer._calculate_trend_slope_from_df(df)
+                features["spending_volatility"] = ChurnFeatureEngineer._calculate_spending_volatility_from_df(df)
+                features["category_entropy"] = ChurnFeatureEngineer._calculate_category_entropy_from_df(df)
+                features["transaction_count_trend"] = ChurnFeatureEngineer._calculate_transaction_count_trend_from_df(df)
+                features["pos_ratio"] = ChurnFeatureEngineer._calculate_pos_ratio_from_df(df)
+                features["online_ratio"] = ChurnFeatureEngineer._calculate_online_ratio_from_df(df)
+                features["avg_transaction_amount"] = ChurnFeatureEngineer._calculate_avg_transaction_amount_from_df(df)
+
+                # UC-2 Features (8 credit metrics) - these don't need DB queries (come from Customer record)
+                features["utilization_ratio"] = ChurnFeatureEngineer.calculate_utilization_ratio(customer)
+                features["dormancy_days"] = ChurnFeatureEngineer.calculate_dormancy(customer)
+                features["payment_delay_score"] = ChurnFeatureEngineer.calculate_payment_delay_score(customer)
+                features["support_sentiment_score"] = ChurnFeatureEngineer.calculate_support_sentiment(customer)
+                features["campaign_engagement_score"] = ChurnFeatureEngineer.calculate_engagement_score(customer)
+                features["account_age_months"] = ChurnFeatureEngineer.calculate_account_age_months(customer)
+                features["balance_to_spending_ratio"] = ChurnFeatureEngineer.calculate_balance_to_spending_ratio(customer, db)
+                features["inactive_months_count"] = ChurnFeatureEngineer.calculate_inactive_months_count(customer, db)
+
+                results[cid] = features
+
+            except Exception as e:
+                logger.warning(f"Feature engineering failed for customer {cid}: {e}")
+
+        return results
+
+    # ========== DATAFRAME-BASED FEATURE HELPERS (for bulk loading) ==========
+    # These are fast versions of the trend calculation methods that work with pre-loaded DataFrames
+
+    @staticmethod
+    def _calculate_trend_slope_from_df(df: pd.DataFrame) -> float:
+        """Calculate trend slope from pre-loaded transaction DataFrame."""
+        if df.empty or len(df) < 2:
+            return 0.0
+
+        df_copy = df.copy()
+        df_copy["date"] = pd.to_datetime(df_copy["date"], errors="coerce")
+
+        # Filter out NULL dates/amounts
+        df_copy = df_copy.dropna(subset=["date", "amount"])
+
+        if len(df_copy) < 2:
+            return 0.0
+
+        # Group by month and sum amounts
+        df_copy["month"] = df_copy["date"].dt.strftime("%Y-%m")
+        monthly_spending = df_copy.groupby("month")["amount"].sum()
+
+        if len(monthly_spending) < 2:
+            return 0.0
+
+        x = np.arange(len(monthly_spending))
+        y = np.array(monthly_spending.values)
+        slope = np.polyfit(x, y, 1)[0]
+        return float(slope)
+
+    @staticmethod
+    def _calculate_spending_volatility_from_df(df: pd.DataFrame) -> float:
+        """Calculate spending volatility from pre-loaded transaction DataFrame."""
+        if df.empty or len(df) < 2:
+            return 0.0
+
+        amounts = df["amount"].dropna()
+
+        if len(amounts) < 2:
+            return 0.0
+
+        mean = amounts.mean()
+        if mean == 0:
+            return 0.0
+
+        volatility = amounts.std() / mean
+        return float(min(volatility, 10.0))
+
+    @staticmethod
+    def _calculate_category_entropy_from_df(df: pd.DataFrame) -> float:
+        """Calculate category diversity from pre-loaded transaction DataFrame."""
+        if df.empty:
+            return 0.0
+
+        # Count transactions by category (skip NULL categories)
+        category_counts = df["mcc_category"].dropna().value_counts()
+
+        if len(category_counts) == 0:
+            return 0.0
+
+        # Calculate Shannon entropy
+        total = category_counts.sum()
+        if total == 0:
+            return 0.0
+
+        entropy = 0.0
+        for count in category_counts.values:
+            if count > 0:
+                prob = count / total
+                entropy -= prob * np.log2(prob)
+
+        return float(entropy)
+
+    @staticmethod
+    def _calculate_transaction_count_trend_from_df(df: pd.DataFrame) -> float:
+        """Calculate transaction frequency trend from pre-loaded transaction DataFrame."""
+        if df.empty or len(df) < 2:
+            return 0.0
+
+        df_copy = df.copy()
+        df_copy["date"] = pd.to_datetime(df_copy["date"], errors="coerce")
+        df_copy = df_copy.dropna(subset=["date"])
+
+        if len(df_copy) < 2:
+            return 0.0
+
+        # Group by month and count
+        df_copy["month"] = df_copy["date"].dt.strftime("%Y-%m")
+        monthly_counts = df_copy.groupby("month").size()
+
+        if len(monthly_counts) < 2:
+            return 0.0
+
+        x = np.arange(len(monthly_counts))
+        y = np.array(monthly_counts.values)
+        trend = np.polyfit(x, y, 1)[0]
+        result = float(trend)
+        return result if np.isfinite(result) else 0.0
+
+    @staticmethod
+    def _calculate_pos_ratio_from_df(df: pd.DataFrame) -> float:
+        """Calculate POS transaction ratio from pre-loaded transaction DataFrame."""
+        if df.empty:
+            return 0.0
+
+        total = len(df)
+        pos_count = (df["channel"] == "POS").sum()
+
+        return float(pos_count / total) if total > 0 else 0.0
+
+    @staticmethod
+    def _calculate_online_ratio_from_df(df: pd.DataFrame) -> float:
+        """Calculate ONLINE transaction ratio from pre-loaded transaction DataFrame."""
+        if df.empty:
+            return 0.0
+
+        total = len(df)
+        online_count = (df["channel"] == "ONLINE").sum()
+
+        return float(online_count / total) if total > 0 else 0.0
+
+    @staticmethod
+    def _calculate_avg_transaction_amount_from_df(df: pd.DataFrame) -> float:
+        """Calculate average transaction amount from pre-loaded transaction DataFrame."""
+        if df.empty:
+            return 0.0
+
+        avg_amount = df["amount"].mean()
+        return float(avg_amount) if pd.notna(avg_amount) else 0.0
+
     # ========== UC-2 FEATURE METHODS (8 CHURN-SPECIFIC) ==========
 
     @staticmethod
@@ -411,44 +615,38 @@ class ChurnFeatureEngineer:
         """Calculate POS (in-store) transaction ratio.
 
         Range: 0.0 to 1.0
+        Optimized: single query with conditional aggregation (no N+1).
         """
-        total = db.query(func.count(Transaction.id)).filter(
+        result = db.query(
+            func.count(Transaction.id).label("total"),
+            func.sum(func.cast(Transaction.channel == "POS", db.Integer)).label("pos_count")
+        ).filter(
             Transaction.customer_id == customer_id
-        ).scalar()
+        ).first()
 
-        if total == 0:
+        if not result or result.total == 0:
             return 0.0
 
-        pos_count = db.query(func.count(Transaction.id)).filter(
-            and_(
-                Transaction.customer_id == customer_id,
-                Transaction.channel == "POS",
-            )
-        ).scalar()
-
-        return float(pos_count / total) if total > 0 else 0.0
+        return float(result.pos_count / result.total) if result.total > 0 else 0.0
 
     @staticmethod
     def _calculate_online_ratio(customer_id: str, db: Session) -> float:
         """Calculate ONLINE transaction ratio.
 
         Range: 0.0 to 1.0
+        Optimized: single query with conditional aggregation (no N+1).
         """
-        total = db.query(func.count(Transaction.id)).filter(
+        result = db.query(
+            func.count(Transaction.id).label("total"),
+            func.sum(func.cast(Transaction.channel == "ONLINE", db.Integer)).label("online_count")
+        ).filter(
             Transaction.customer_id == customer_id
-        ).scalar()
+        ).first()
 
-        if total == 0:
+        if not result or result.total == 0:
             return 0.0
 
-        online_count = db.query(func.count(Transaction.id)).filter(
-            and_(
-                Transaction.customer_id == customer_id,
-                Transaction.channel == "ONLINE",
-            )
-        ).scalar()
-
-        return float(online_count / total) if total > 0 else 0.0
+        return float(result.online_count / result.total) if result.total > 0 else 0.0
 
     @staticmethod
     def _calculate_avg_transaction_amount(customer_id: str, db: Session) -> float:

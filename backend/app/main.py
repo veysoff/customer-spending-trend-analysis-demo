@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from typing import List
+from pathlib import Path
+import json
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,6 +77,52 @@ def load_cached_models():
         logger.error(f"❌ Failed to load fraud detector: {e}")
 
     return MODEL_CACHE
+
+
+def _list_model_versions(directory: Path, prefix: str) -> list:
+    """List available model versions with timestamps and metrics.
+
+    Args:
+        directory: Directory containing model versions
+        prefix: File prefix to search for (e.g., "churn_model_")
+
+    Returns:
+        List of dicts with version, path, and metrics for up to 5 most recent versions
+    """
+    try:
+        # Find all pkl files matching the prefix, sorted by modification time (newest first)
+        files = sorted(
+            directory.glob(f"{prefix}*.pkl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+
+        result = []
+        for f in files[:5]:  # Show up to 5 most recent versions
+            # Extract timestamp from filename (e.g., "churn_model_20260227T143022.pkl" → "20260227T143022")
+            ts = f.stem.replace(prefix.rstrip("_"), "").lstrip("_")
+
+            # Try to load associated metrics file
+            metrics_file = directory / f"metrics_{ts}.json"
+            metrics = {}
+            if metrics_file.exists():
+                try:
+                    with open(metrics_file) as mf:
+                        metrics = json.load(mf)
+                except Exception as e:
+                    logger.warning(f"Failed to read metrics file {metrics_file}: {e}")
+
+            result.append({
+                "version": ts,
+                "path": str(f.name),
+                "metrics": metrics,
+            })
+
+        return result
+    except Exception as e:
+        logger.warning(f"Error listing model versions: {e}")
+        return []
+
 
 # Allowed CORS origins (restrict in production)
 ALLOWED_ORIGINS: List[str] = [
@@ -294,12 +342,26 @@ async def get_customer_profile(
     if features.get("category_entropy", 1.0) < 1.0 and features.get("trend_slope", 0.0) < 0:
         behavior_flags.append("declining_diversity")
 
-    # "spending_spike" — any transaction in last 30 days > 3x mean amount
+    # "spending_spike" — recent spending > 2.5x baseline (90-day window, excluding spike window)
+    # Uses rolling baseline to avoid false positives on high-earning stable customers
     last_30_cutoff = customer_df["date"].max() - pd.Timedelta(days=30)
+    last_90_cutoff = customer_df["date"].max() - pd.Timedelta(days=90)
+
     recent_30 = customer_df[customer_df["date"] >= last_30_cutoff]
-    mean_amount = customer_df["amount"].mean()
-    if len(recent_30) > 0 and mean_amount > 0:
-        if (recent_30["amount"] > 3 * mean_amount).any():
+    baseline_window = customer_df[
+        (customer_df["date"] >= last_90_cutoff) &
+        (customer_df["date"] < last_30_cutoff)
+    ]
+
+    # Use baseline_window mean if available (>= 5 transactions); otherwise fall back to all-history mean
+    baseline_mean = (
+        baseline_window["amount"].mean()
+        if len(baseline_window) >= 5
+        else customer_df["amount"].mean()
+    )
+
+    if len(recent_30) > 0 and baseline_mean > 0:
+        if (recent_30["amount"] > 2.5 * baseline_mean).any():
             behavior_flags.append("spending_spike")
 
     # "silent_churn" — no transactions in last 60 days
@@ -713,6 +775,30 @@ async def train_churn_model(db: Session = Depends(get_db)) -> ModelTrainingRespo
         raise HTTPException(
             status_code=500,
             detail="Model training failed due to internal error"
+        )
+
+
+@app.get("/api/ml/model-versions")
+async def get_model_versions() -> dict:
+    """List available model versions with timestamps and metrics.
+
+    Returns:
+        Dict with "churn" and "fraud" keys, each containing a list of version dicts.
+        Each version dict has: version (timestamp), path (filename), metrics (dict).
+    """
+    try:
+        churn_versions = _list_model_versions(config.MODELS_DIR, "churn_model_")
+        fraud_versions = _list_model_versions(config.MODELS_DIR, "fraud_detector_")
+
+        return {
+            "churn": churn_versions,
+            "fraud": fraud_versions,
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving model versions: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve model versions"
         )
 
 
