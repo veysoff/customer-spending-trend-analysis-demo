@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, Integer
 
 from ..db.models import Customer, Transaction
 
@@ -619,7 +619,7 @@ class ChurnFeatureEngineer:
         """
         result = db.query(
             func.count(Transaction.id).label("total"),
-            func.sum(func.cast(Transaction.channel == "POS", db.Integer)).label("pos_count")
+            func.sum(func.cast(Transaction.channel == "POS", Integer)).label("pos_count")
         ).filter(
             Transaction.customer_id == customer_id
         ).first()
@@ -638,7 +638,7 @@ class ChurnFeatureEngineer:
         """
         result = db.query(
             func.count(Transaction.id).label("total"),
-            func.sum(func.cast(Transaction.channel == "ONLINE", db.Integer)).label("online_count")
+            func.sum(func.cast(Transaction.channel == "ONLINE", Integer)).label("online_count")
         ).filter(
             Transaction.customer_id == customer_id
         ).first()

@@ -1933,7 +1933,7 @@ class PersonaJobLoss(DemoPersona):
                 grocery_pct = 0.70
                 restaurant_pct = 0.05
 
-            num_txs = self.rng.integers(5, 12)
+            num_txs = self.rng.randint(5, 12)
             for _ in range(num_txs):
                 amount = abs(self.rng.normal(daily_budget, daily_budget * 0.3))
                 amount = min(amount, 2000.0)  # cap
@@ -1960,7 +1960,7 @@ class PersonaJobLoss(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(4, 12))
+                current_date += timedelta(hours=self.rng.randint(4, 12))
 
             # Move to next month
             current_date = current_date.replace(day=1) + timedelta(days=32)
@@ -1992,7 +1992,7 @@ class PersonaBonus(DemoPersona):
             is_bonus = (month_counter % 6 == 0)  # Months 6, 12, 18, ...
             daily_budget = (12000 / 30) if is_bonus else (3500 / 30)
 
-            num_txs = self.rng.integers(8, 15)
+            num_txs = self.rng.randint(8, 15)
             for _ in range(num_txs):
                 amount = abs(self.rng.normal(daily_budget, daily_budget * 0.4))
                 amount = min(amount, 3000.0)
@@ -2030,7 +2030,7 @@ class PersonaBonus(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon", "evening"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(6, 18))
+                current_date += timedelta(hours=self.rng.randint(6, 18))
 
             # Move to next month
             current_date = current_date.replace(day=1) + timedelta(days=32)
@@ -2056,7 +2056,7 @@ class PersonaRetirement(DemoPersona):
 
         while current_date < end_date:
             # Very consistent daily spending
-            num_txs = self.rng.integers(3, 6)
+            num_txs = self.rng.randint(3, 6)
             for _ in range(num_txs):
                 rand = self.rng.random()
                 if rand < 0.70:
@@ -2083,7 +2083,7 @@ class PersonaRetirement(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(8, 16))
+                current_date += timedelta(hours=self.rng.randint(8, 16))
 
         return transactions
 
@@ -2121,7 +2121,7 @@ class PersonaWedding(DemoPersona):
                 daily_budget = 3500 / 30
                 is_wedding = False
 
-            num_txs = self.rng.integers(6, 12)
+            num_txs = self.rng.randint(6, 12)
             for _ in range(num_txs):
                 amount = abs(self.rng.normal(daily_budget, daily_budget * 0.35))
                 amount = min(amount, 4000.0)
@@ -2162,7 +2162,7 @@ class PersonaWedding(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon", "evening"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(6, 14))
+                current_date += timedelta(hours=self.rng.randint(6, 14))
 
             # Move to next month
             current_date = current_date.replace(day=1) + timedelta(days=32)
@@ -2195,7 +2195,7 @@ class PersonaBudgetConstraint(DemoPersona):
 
         while current_date < end_date:
             # Frequent small txs throughout the day
-            num_txs = self.rng.integers(15, 25)
+            num_txs = self.rng.randint(15, 25)
             for _ in range(num_txs):
                 amount = self.rng.uniform(100, 250)  # Small transactions
 
@@ -2221,7 +2221,7 @@ class PersonaBudgetConstraint(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon", "evening"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(1, 4))
+                current_date += timedelta(hours=self.rng.randint(1, 4))
 
         return transactions
 
@@ -2245,7 +2245,7 @@ class PersonaSilentDisengagement(DemoPersona):
 
         while current_date < end_date:
             # Very sparse — only 1-2 txs per week
-            num_txs = self.rng.integers(1, 2)
+            num_txs = self.rng.randint(1, 2)
             for _ in range(num_txs):
                 amount = self.rng.uniform(300, 600)
 
@@ -2273,7 +2273,7 @@ class PersonaSilentDisengagement(DemoPersona):
                 })
 
             # Long gap before next transaction (dormancy)
-            current_date += timedelta(days=self.rng.integers(8, 15))
+            current_date += timedelta(days=self.rng.randint(8, 15))
 
         return transactions
 
@@ -2303,7 +2303,7 @@ class PersonaSubscriptionChurn(DemoPersona):
             else:
                 daily_budget = (4000 * 0.70) / 30
 
-            num_txs = self.rng.integers(8, 14)
+            num_txs = self.rng.randint(8, 14)
             for _ in range(num_txs):
                 amount = abs(self.rng.normal(daily_budget, daily_budget * 0.3))
                 amount = min(amount, 2000.0)
@@ -2335,7 +2335,7 @@ class PersonaSubscriptionChurn(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon", "evening"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(4, 12))
+                current_date += timedelta(hours=self.rng.randint(4, 12))
 
             # Move to next month
             current_date = current_date.replace(day=1) + timedelta(days=32)
@@ -2372,10 +2372,10 @@ class PersonaAccountTakeover(DemoPersona):
 
             if is_compromised:
                 # 3x velocity: 40 txs/mo → 120 txs/mo
-                num_txs = self.rng.integers(30, 40)
+                num_txs = self.rng.randint(30, 40)
                 normal_amount = 500.0
             else:
-                num_txs = self.rng.integers(8, 15)
+                num_txs = self.rng.randint(8, 15)
                 normal_amount = 250.0
 
             for _ in range(num_txs):
@@ -2383,14 +2383,14 @@ class PersonaAccountTakeover(DemoPersona):
                     # Foreign countries, high risk MCCs
                     country = self.rng.choice(["NG", "CN", "RU", "UA"])
                     amount = self.rng.uniform(normal_amount * 2, normal_amount * 4)
-                    hour = self.rng.integers(2, 6) if self.rng.random() < 0.80 else self.rng.integers(0, 24)
+                    hour = self.rng.randint(2, 6) if self.rng.random() < 0.80 else self.rng.randint(0, 24)
                     channel = "ONLINE"
                     mcc, category = "7999", "ENTERTAINMENT"
                 else:
                     # Normal: UAE, reasonable amounts, POS/ONLINE mix
                     country = "AE"
                     amount = self.rng.uniform(100, 500)
-                    hour = self.rng.integers(8, 20)
+                    hour = self.rng.randint(8, 20)
                     channel = self.rng.choice(["POS", "ONLINE"])
                     rand = self.rng.random()
                     if rand < 0.50:
@@ -2410,7 +2410,7 @@ class PersonaAccountTakeover(DemoPersona):
                     "country": country,
                     "time_of_day": time_str,
                 })
-                current_date += timedelta(minutes=self.rng.integers(10, 60))
+                current_date += timedelta(minutes=self.rng.randint(10, 60))
 
         return transactions
 
@@ -2435,7 +2435,7 @@ class PersonaMicroLending(DemoPersona):
         while current_date < end_date:
             if day_in_month <= 10:
                 # Micro-txs burst
-                num_txs = self.rng.integers(30, 50)
+                num_txs = self.rng.randint(30, 50)
                 for _ in range(num_txs):
                     amount = self.rng.uniform(8, 18)
                     transactions.append({
@@ -2449,7 +2449,7 @@ class PersonaMicroLending(DemoPersona):
                         "country": "AE",
                         "time_of_day": self.rng.choice(["morning", "afternoon"]),
                     })
-                    current_date += timedelta(minutes=self.rng.integers(3, 12))
+                    current_date += timedelta(minutes=self.rng.randint(3, 12))
             else:
                 # Large ATM withdrawal
                 transactions.append({
@@ -2493,7 +2493,7 @@ class PersonaHolidayFraud(DemoPersona):
 
             if month != 12:
                 # Normal month
-                num_txs = self.rng.integers(5, 10)
+                num_txs = self.rng.randint(5, 10)
                 for _ in range(num_txs):
                     amount = self.rng.uniform(200, 600)
                     rand = self.rng.random()
@@ -2515,11 +2515,11 @@ class PersonaHolidayFraud(DemoPersona):
                         "country": "AE",
                         "time_of_day": self.rng.choice(["morning", "afternoon"]),
                     })
-                    current_date += timedelta(hours=self.rng.integers(6, 18))
+                    current_date += timedelta(hours=self.rng.randint(6, 18))
 
             elif day <= 15:
                 # Legitimate holiday shopping
-                num_txs = self.rng.integers(5, 8)
+                num_txs = self.rng.randint(5, 8)
                 for _ in range(num_txs):
                     amount = self.rng.uniform(500, 1500)
                     rand = self.rng.random()
@@ -2544,11 +2544,11 @@ class PersonaHolidayFraud(DemoPersona):
                         "country": "AE",
                         "time_of_day": self.rng.choice(["morning", "afternoon", "evening"]),
                     })
-                    current_date += timedelta(hours=self.rng.integers(6, 14))
+                    current_date += timedelta(hours=self.rng.randint(6, 14))
 
             else:
                 # Fraudulent overlay: micro-txs + high-risk MCCs + geo jumps
-                num_txs = self.rng.integers(15, 25)
+                num_txs = self.rng.randint(15, 25)
                 for _ in range(num_txs):
                     rand = self.rng.random()
                     if rand < 0.40:
@@ -2566,7 +2566,7 @@ class PersonaHolidayFraud(DemoPersona):
                     else:
                         mcc, category = "5411", "GROCERY"
 
-                    hour = self.rng.integers(2, 6) if self.rng.random() < 0.40 else self.rng.integers(0, 24)
+                    hour = self.rng.randint(2, 6) if self.rng.random() < 0.40 else self.rng.randint(0, 24)
                     time_str = f"{hour:02d}:00"
 
                     transactions.append({
@@ -2580,7 +2580,7 @@ class PersonaHolidayFraud(DemoPersona):
                         "country": country,
                         "time_of_day": time_str,
                     })
-                    current_date += timedelta(minutes=self.rng.integers(5, 30))
+                    current_date += timedelta(minutes=self.rng.randint(5, 30))
 
         return transactions
 
@@ -2607,7 +2607,7 @@ class PersonaPaymentFraud(DemoPersona):
 
             if is_fraud_month:
                 # Burst month: 20-30 rapid txs
-                num_txs = self.rng.integers(20, 30)
+                num_txs = self.rng.randint(20, 30)
                 for i in range(num_txs):
                     amount = self.rng.uniform(1, 500)
                     transactions.append({
@@ -2621,10 +2621,10 @@ class PersonaPaymentFraud(DemoPersona):
                         "country": "AE",
                         "time_of_day": f"{9 + (i % 8):02d}:00",
                     })
-                    current_date += timedelta(minutes=self.rng.integers(2, 15))
+                    current_date += timedelta(minutes=self.rng.randint(2, 15))
             else:
                 # Normal month: 1-2 regular bill txs
-                num_txs = self.rng.integers(1, 3)
+                num_txs = self.rng.randint(1, 3)
                 for _ in range(num_txs):
                     amount = self.rng.uniform(500, 1500)
                     transactions.append({
@@ -2638,7 +2638,7 @@ class PersonaPaymentFraud(DemoPersona):
                         "country": "AE",
                         "time_of_day": self.rng.choice(["morning", "afternoon"]),
                     })
-                    current_date += timedelta(days=self.rng.integers(5, 15))
+                    current_date += timedelta(days=self.rng.randint(5, 15))
 
             # Move to next month
             current_date = current_date.replace(day=1) + timedelta(days=32)
@@ -2667,13 +2667,13 @@ class PersonaMultiCountrySmurf(DemoPersona):
         country_idx = 0
 
         while current_date < end_date:
-            num_txs = self.rng.integers(8, 15)
+            num_txs = self.rng.randint(8, 15)
             for _ in range(num_txs):
                 amount = self.rng.uniform(100, 5000)
                 country = countries[country_idx % len(countries)]
                 country_idx += 1
 
-                hour = self.rng.integers(0, 24)
+                hour = self.rng.randint(0, 24)
                 time_str = f"{hour:02d}:00"
 
                 transactions.append({
@@ -2687,7 +2687,7 @@ class PersonaMultiCountrySmurf(DemoPersona):
                     "country": country,
                     "time_of_day": time_str,
                 })
-                current_date += timedelta(hours=self.rng.integers(2, 6))
+                current_date += timedelta(hours=self.rng.randint(2, 6))
 
         return transactions
 
@@ -2714,14 +2714,14 @@ class PersonaLateNightSyndrome(DemoPersona):
             month_counter += 1
             chosen_category = high_risk_categories[month_counter % len(high_risk_categories)]
 
-            num_txs = self.rng.integers(8, 15)
+            num_txs = self.rng.randint(8, 15)
             for _ in range(num_txs):
                 amount = self.rng.uniform(100, 1000)
 
                 if self.rng.random() < 0.95:
-                    hour = self.rng.integers(2, 6)
+                    hour = self.rng.randint(2, 6)
                 else:
-                    hour = self.rng.integers(0, 24)
+                    hour = self.rng.randint(0, 24)
 
                 time_str = f"{hour:02d}:00"
 
@@ -2746,7 +2746,7 @@ class PersonaLateNightSyndrome(DemoPersona):
                     "country": "AE",
                     "time_of_day": time_str,
                 })
-                current_date += timedelta(hours=self.rng.integers(1, 4))
+                current_date += timedelta(hours=self.rng.randint(1, 4))
 
         return transactions
 
@@ -2772,7 +2772,7 @@ class PersonaCategoryWhitelabeling(DemoPersona):
             month_counter += 1
             is_fraud = (month_counter > 2)
 
-            num_txs = self.rng.integers(6, 12)
+            num_txs = self.rng.randint(6, 12)
             for _ in range(num_txs):
                 amount = self.rng.uniform(150, 600)
 
@@ -2808,7 +2808,7 @@ class PersonaCategoryWhitelabeling(DemoPersona):
                     "country": "AE",
                     "time_of_day": self.rng.choice(["morning", "afternoon", "evening"]),
                 })
-                current_date += timedelta(hours=self.rng.integers(4, 12))
+                current_date += timedelta(hours=self.rng.randint(4, 12))
 
         return transactions
 
@@ -2835,7 +2835,7 @@ class PersonaRecoveryArc(DemoPersona):
 
             if month_counter <= 2:
                 # Normal phase
-                num_txs = self.rng.integers(6, 12)
+                num_txs = self.rng.randint(6, 12)
                 for _ in range(num_txs):
                     amount = self.rng.uniform(200, 700)
                     rand = self.rng.random()
@@ -2857,15 +2857,15 @@ class PersonaRecoveryArc(DemoPersona):
                         "country": "AE",
                         "time_of_day": self.rng.choice(["morning", "afternoon"]),
                     })
-                    current_date += timedelta(hours=self.rng.integers(6, 14))
+                    current_date += timedelta(hours=self.rng.randint(6, 14))
 
             elif month_counter <= 4:
                 # Fraud phase
-                num_txs = self.rng.integers(25, 35)
+                num_txs = self.rng.randint(25, 35)
                 for _ in range(num_txs):
                     amount = self.rng.uniform(100, 1000)
                     country = self.rng.choice(["NG", "CN", "AE", "AE"])  # Mostly foreign
-                    hour = self.rng.integers(2, 6) if self.rng.random() < 0.70 else self.rng.integers(0, 24)
+                    hour = self.rng.randint(2, 6) if self.rng.random() < 0.70 else self.rng.randint(0, 24)
                     time_str = f"{hour:02d}:00"
 
                     transactions.append({
@@ -2879,18 +2879,18 @@ class PersonaRecoveryArc(DemoPersona):
                         "country": country,
                         "time_of_day": time_str,
                     })
-                    current_date += timedelta(minutes=self.rng.integers(10, 40))
+                    current_date += timedelta(minutes=self.rng.randint(10, 40))
 
             else:
                 # Recovery phase: fraud signals gradually disappear
                 pct_normal = min(1.0, (month_counter - 4) / 2.0)  # 0-100% normal by month 6
-                num_txs = self.rng.integers(8, 14)
+                num_txs = self.rng.randint(8, 14)
                 for _ in range(num_txs):
                     if self.rng.random() < pct_normal:
                         # Legitimate
                         amount = self.rng.uniform(200, 700)
                         country = "AE"
-                        hour = self.rng.integers(8, 20)
+                        hour = self.rng.randint(8, 20)
                         rand = self.rng.random()
                         if rand < 0.50:
                             mcc, category = "5411", "GROCERY"
@@ -2902,7 +2902,7 @@ class PersonaRecoveryArc(DemoPersona):
                         # Remaining fraud signals
                         amount = self.rng.uniform(100, 600)
                         country = self.rng.choice(["NG", "AE", "AE", "AE"])
-                        hour = self.rng.integers(2, 6) if self.rng.random() < 0.40 else self.rng.integers(8, 20)
+                        hour = self.rng.randint(2, 6) if self.rng.random() < 0.40 else self.rng.randint(8, 20)
                         mcc, category = "7999", "ENTERTAINMENT"
                         merchant = "Suspicious Merchant"
 
@@ -2918,7 +2918,7 @@ class PersonaRecoveryArc(DemoPersona):
                         "country": country,
                         "time_of_day": time_str,
                     })
-                    current_date += timedelta(hours=self.rng.integers(4, 12))
+                    current_date += timedelta(hours=self.rng.randint(4, 12))
 
         return transactions
 
