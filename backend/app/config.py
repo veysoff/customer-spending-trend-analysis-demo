@@ -37,6 +37,6 @@ SPENDING_VARIANCE = 500.0
 # Training vs Demo Configuration:
 # On first startup: generate TRAINING_N_CUSTOMERS for model training, then prune to DEMO_N_CUSTOMERS
 # TRAINING_N_CUSTOMERS=1000 → full dataset for quality ML model
-# DEMO_N_CUSTOMERS=10 → background customers kept after pruning (+ all 40 personas)
+# DEMO_N_CUSTOMERS=50 → background customers kept after pruning (+ all 55 personas = ~105 total)
 TRAINING_N_CUSTOMERS: int = int(os.getenv("TRAINING_N_CUSTOMERS", "1000"))
-DEMO_N_CUSTOMERS: int = int(os.getenv("DEMO_N_CUSTOMERS", "10"))
+DEMO_N_CUSTOMERS: int = int(os.getenv("DEMO_N_CUSTOMERS", "50"))

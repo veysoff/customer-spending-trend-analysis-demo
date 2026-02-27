@@ -27,10 +27,10 @@ _HOUR_LABELS: Dict[str, int] = {
 }
 
 # MCC categories considered inherently higher risk
-_HIGH_RISK_MCC = {"CASINO", "PAWN_SHOP", "FIREARMS", "DIRECT_MARKETING"}
+_HIGH_RISK_MCC = {"CASINO", "PAWN_SHOP", "FIREARMS"}
 
 # Standard countries present in the synthetic data generator
-_KNOWN_COUNTRIES = {"GB", "US", "FR", "DE", "ES"}
+_KNOWN_COUNTRIES = {"AE", "IN", "PH", "GB", "US", "FR", "DE", "ES"}
 
 
 class FraudFeatureExtractor:
@@ -383,14 +383,34 @@ class FraudFeatureExtractor:
 
     @staticmethod
     def _merchant_drift_score(tx_row: pd.Series, history_df: pd.DataFrame) -> float:
-        """1.0 if this transaction's MCC category was not seen in the customer's history."""
+        """1.0 if this transaction's MCC category was not seen in the last 90 days of history.
+
+        Limited to 90-day lookback window for more relevant pattern detection.
+        Older merchant categories are not considered drift signals.
+        """
         if history_df.empty or "mcc_category" not in history_df.columns:
             return 0.0
         try:
+            tx_date = pd.to_datetime(tx_row.get("date"), errors="coerce")
+            if pd.isna(tx_date):
+                # No date context → fallback to full history
+                known = {str(c).upper() for c in history_df["mcc_category"].dropna()}
+            else:
+                # Limit to last 90 days
+                window_start = tx_date - timedelta(days=90)
+                history_df_dated = history_df.copy()
+                history_df_dated["date"] = pd.to_datetime(history_df_dated["date"], errors="coerce")
+                recent = history_df_dated[
+                    (history_df_dated["date"] >= window_start) &
+                    (history_df_dated["date"] < tx_date)
+                ]
+                if recent.empty:
+                    return 0.0  # No history in 90-day window
+                known = {str(c).upper() for c in recent["mcc_category"].dropna()}
+
             tx_cat = str(tx_row.get("mcc_category", "") or "").upper()
             if not tx_cat:
                 return 0.0
-            known = {str(c).upper() for c in history_df["mcc_category"].dropna()}
             return 1.0 if tx_cat not in known else 0.0
         except Exception:
             return 0.0
