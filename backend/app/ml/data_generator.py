@@ -1,0 +1,378 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import uuid
+from typing import Tuple, List
+
+class SyntheticDataGenerator:
+    """Generate realistic synthetic banking transaction data."""
+
+    MCC_CATEGORIES = {
+        "5411": "GROCERY",
+        "5422": "PHARMACY",
+        "5812": "RESTAURANTS",
+        "4511": "AIRLINES",
+        "7011": "ACCOMMODATION",
+        "5961": "DIRECT_MARKETING",
+        "5733": "ELECTRONICS",
+        "5944": "BOOKSTORES",
+        "5200": "BUILDING_SUPPLIES",
+        "4213": "LOGISTICS",
+    }
+
+    CHANNELS = ["POS", "ONLINE", "ATM", "MOBILE"]
+    MERCHANTS = ["Tesco", "Sainsbury's", "Amazon", "Netflix", "Uber", "Starbucks",
+                 "McDonald's", "Boots", "John Lewis", "Argos", "Next", "M&S"]
+    COUNTRIES = ["GB", "US", "FR", "DE", "ES"]
+
+    def __init__(self, n_customers: int = 1000, n_months: int = 12, seed: int = 42):
+        self.n_customers = n_customers
+        self.n_months = n_months
+        self.seed = seed
+        # Use a local random generator to avoid affecting global numpy state
+        self.rng = np.random.default_rng(seed)
+        # Calculate start date: n_months ago from today
+        today = datetime.now()
+        # Calculate start date by going back n_months from today
+        if n_months <= 12:
+            start_year = today.year
+            start_month = today.month - n_months
+            if start_month < 1:
+                start_year -= 1
+                start_month += 12
+        else:
+            years_back = (n_months - 1) // 12
+            months_remaining = n_months % 12
+            start_year = today.year - years_back - 1
+            start_month = 12 - months_remaining
+        self.start_date = datetime(start_year, start_month, 1)
+
+    def _get_pattern_type(self, customer_idx: int) -> str:
+        """Assign behavior pattern to customer.
+
+        Distribution:
+        - 0-39%:  normal          (stable active)
+        - 40-69%: silent_churn    (gradual decline → churned)
+        - 70-89%: at_risk         (declining frequency, warming signals)
+        - 90-99%: lifestyle_shift (category change, still active)
+        """
+        ratio = customer_idx / self.n_customers
+        if ratio < 0.40:
+            return "normal"
+        elif ratio < 0.70:
+            return "silent_churn"
+        elif ratio < 0.90:
+            return "at_risk"
+        else:
+            return "lifestyle_shift"
+
+    def _generate_monthly_spending(self, pattern: str, month: int) -> float:
+        """Generate monthly spending based on pattern."""
+        base = self.rng.normal(5000, 500)
+
+        # Seasonal adjustment
+        if month == 12:  # December
+            seasonal = base * 1.15
+        elif month == 8:  # August
+            seasonal = base * 0.80
+        else:
+            seasonal = base
+
+        if pattern == "normal":
+            return seasonal
+        elif pattern == "silent_churn":
+            # 10% monthly decline starting month 4
+            if month >= 4:
+                decline_factor = (0.9 ** (month - 3))
+                return seasonal * decline_factor
+            return seasonal
+        elif pattern == "at_risk":
+            # Mild decline: 4% per month starting month 5 — borderline behaviour
+            if month >= 5:
+                decline_factor = (0.96 ** (month - 4))
+                return seasonal * decline_factor
+            return seasonal
+        else:  # lifestyle_shift
+            return seasonal
+
+    def _generate_daily_transactions(self, monthly_spending: float, month: int,
+                                     pattern: str) -> List[Tuple]:
+        """Generate daily transactions for a month."""
+        transactions = []
+        days_in_month = 28 if month == 2 else 30 if month in [4, 6, 9, 11] else 31
+
+        # Transaction frequency varies by pattern
+        if pattern == "silent_churn":
+            # Sharply declining frequency — nearly dormant by end
+            if month >= 7:
+                n_transactions = max(int(self.rng.normal(10, 3)), 3)
+            elif month >= 4:
+                n_transactions = max(int(self.rng.normal(20, 4)), 8)
+            else:
+                n_transactions = max(int(self.rng.normal(28, 4)), 10)
+        elif pattern == "at_risk":
+            # Gradually declining frequency — still active but slowing
+            if month >= 8:
+                n_transactions = max(int(self.rng.normal(18, 4)), 8)
+            elif month >= 5:
+                n_transactions = max(int(self.rng.normal(23, 4)), 10)
+            else:
+                n_transactions = max(int(self.rng.normal(28, 4)), 12)
+        else:
+            n_transactions = max(int(self.rng.normal(30, 5)), 10)
+
+        for _ in range(n_transactions):
+            day = self.rng.integers(1, days_in_month + 1)
+            hour = self.rng.integers(0, 24)
+            minute = self.rng.integers(0, 60)
+
+            amount = self.rng.lognormal(np.log(50), 0.5)  # Lognormal distribution
+            amount = min(amount, monthly_spending)
+
+            mcc = self.rng.choice(list(self.MCC_CATEGORIES.keys()))
+            channel = self.rng.choice(self.CHANNELS)
+            merchant = self.rng.choice(self.MERCHANTS)
+            country = self.rng.choice(self.COUNTRIES)
+
+            transactions.append((
+                day, hour, minute, amount, mcc, channel, merchant, country
+            ))
+
+        return transactions
+
+    def _shift_categories(self, mcc_list: List[str]) -> List[str]:
+        """Shift category distribution for lifestyle shift."""
+        # Increase GROCERY, decrease RESTAURANTS and AIRLINES
+        adjusted = []
+        for mcc in mcc_list:
+            if self.rng.random() < 0.3:  # 30% chance to change
+                if mcc in ["5812", "4511"]:  # RESTAURANTS, AIRLINES
+                    adjusted.append("5411")  # Switch to GROCERY
+                else:
+                    adjusted.append(mcc)
+            else:
+                adjusted.append(mcc)
+        return adjusted
+
+    def generate(self) -> pd.DataFrame:
+        """Generate complete synthetic dataset."""
+        records = []
+
+        for cust_idx in range(self.n_customers):
+            customer_id = f"customer_{cust_idx:06d}"
+            pattern = self._get_pattern_type(cust_idx)
+
+            # Track transactions for lifestyle shift category change
+            month_mccs = {m: [] for m in range(1, self.n_months + 1)}
+
+            for month in range(1, self.n_months + 1):
+                monthly_spending = self._generate_monthly_spending(pattern, month)
+                transactions = self._generate_daily_transactions(
+                    monthly_spending, month, pattern
+                )
+
+                for day, hour, minute, amount, mcc, channel, merchant, country in transactions:
+                    # Apply category shift for lifestyle_shift pattern
+                    if pattern == "lifestyle_shift" and month >= 7:
+                        if self.rng.random() < 0.4:  # 40% category shift
+                            mcc = "5411"  # Force GROCERY
+
+                    # Calculate date relative to start_date
+                    year = self.start_date.year
+                    month_num = self.start_date.month + month - 1
+                    if month_num > 12:
+                        year += (month_num - 1) // 12
+                        month_num = ((month_num - 1) % 12) + 1
+
+                    # Handle invalid day for month (e.g., Feb 31st)
+                    import calendar
+                    max_day = calendar.monthrange(year, month_num)[1]
+                    safe_day = min(day, max_day)
+
+                    date_obj = datetime(year, month_num, safe_day, hour, minute)
+
+                    records.append({
+                        "transaction_id": str(uuid.uuid4()),
+                        "customer_id": customer_id,
+                        "date": date_obj.strftime("%Y-%m-%d"),
+                        "amount": round(amount, 2),
+                        "mcc": mcc,
+                        "mcc_category": self.MCC_CATEGORIES[mcc],
+                        "channel": channel,
+                        "merchant": merchant,
+                        "country": country,
+                        "time_of_day": date_obj.strftime("%H:%M"),
+                        "pattern": pattern,
+                    })
+
+                    month_mccs[month].append(mcc)
+
+        df = pd.DataFrame(records)
+        df["date"] = pd.to_datetime(df["date"])
+        return df.sort_values(["customer_id", "date"]).reset_index(drop=True)
+
+    def _generate_churn_metrics(self, churn_pattern: str) -> dict:
+        """Generate credit and churn-related metrics based on pattern.
+
+        Patterns:
+        - "stable": no churn, low dormancy (0-30 days), active customer
+        - "churning": churned, high dormancy (90-180 days), declining engagement
+        - "at_risk": no churn yet, medium dormancy (30-60 days), warning signs
+        - "churned": churned, very high dormancy (180+ days), inactive for long time
+        """
+        if churn_pattern == "stable":
+            credit_limit = float(self.rng.uniform(8000, 25000))
+            return {
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.05, 0.35) * credit_limit),  # 5-35% utilization
+                "annual_income": float(self.rng.uniform(30000, 120000)),
+                "is_churned": 0,
+                "support_tickets_count": int(self.rng.poisson(1)),
+                "complaint_severity": "LOW",
+                "campaigns_opened": int(self.rng.integers(3, 10)),
+                "campaigns_clicked": int(self.rng.integers(1, 5)),
+                "max_payment_delay_days": int(self.rng.integers(0, 5)),
+                "total_late_payments": 0,
+            }
+        elif churn_pattern == "churning":
+            credit_limit = float(self.rng.uniform(5000, 15000))
+            return {
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.60, 0.90) * credit_limit),  # 60-90% utilization (stressed)
+                "annual_income": float(self.rng.uniform(25000, 80000)),
+                "is_churned": 1,
+                "support_tickets_count": int(self.rng.poisson(5)),
+                "complaint_severity": "HIGH",
+                "campaigns_opened": int(self.rng.integers(0, 3)),
+                "campaigns_clicked": int(self.rng.integers(0, 1)),
+                "max_payment_delay_days": int(self.rng.integers(10, 30)),
+                "total_late_payments": int(self.rng.integers(1, 5)),
+            }
+        elif churn_pattern == "at_risk":
+            # Borderline customers: not churned yet but showing clear warning signals.
+            # Model should score them 40-70%: elevated utilisation, some payment delays,
+            # medium complaint severity, low-but-not-zero campaign engagement.
+            credit_limit = float(self.rng.uniform(8000, 20000))
+            return {
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.45, 0.75) * credit_limit),  # 45-75% utilization (elevated)
+                "annual_income": float(self.rng.uniform(30000, 90000)),
+                "is_churned": 0,
+                "support_tickets_count": int(self.rng.poisson(4)),   # more complaints than stable
+                "complaint_severity": "MEDIUM",
+                "campaigns_opened": int(self.rng.integers(1, 4)),    # low engagement
+                "campaigns_clicked": int(self.rng.integers(0, 2)),
+                "max_payment_delay_days": int(self.rng.integers(7, 20)),  # noticeable delays
+                "total_late_payments": int(self.rng.integers(1, 3)),      # some late payments
+            }
+        else:  # churned (long-term inactive)
+            credit_limit = float(self.rng.uniform(3000, 10000))
+            return {
+                "credit_limit": credit_limit,
+                "current_balance": float(self.rng.uniform(0.40, 0.75) * credit_limit),  # 40-75% utilization
+                "annual_income": float(self.rng.uniform(20000, 60000)),
+                "is_churned": 1,
+                "support_tickets_count": int(self.rng.poisson(2)),
+                "complaint_severity": "MEDIUM",
+                "campaigns_opened": int(self.rng.integers(0, 2)),
+                "campaigns_clicked": 0,
+                "max_payment_delay_days": 0,
+                "total_late_payments": 0,
+            }
+
+    def _get_churn_pattern(self, customer_idx: int) -> str:
+        """Assign churn pattern to customer based on distribution.
+
+        Mirrors _get_pattern_type so transaction behaviour and credit
+        metrics are consistent for the same customer index:
+
+        - 0-39%:  stable          → normal transactions,   low risk metrics
+        - 40-69%: churning        → silent_churn txns,     high risk metrics (is_churned=1)
+        - 70-89%: at_risk         → at_risk txns,          medium-high metrics (is_churned=0)
+        - 90-99%: churned         → lifestyle_shift txns,  high dormancy metrics (is_churned=1)
+        """
+        ratio = customer_idx / self.n_customers
+        if ratio < 0.40:
+            return "stable"
+        elif ratio < 0.70:
+            return "churning"
+        elif ratio < 0.90:
+            return "at_risk"
+        else:
+            return "churned"
+
+    def save_to_db(self, db_session, batch_size: int = 1000):
+        """Save generated data to database in batches.
+
+        Args:
+            db_session: SQLAlchemy session
+            batch_size: Number of records to insert per batch
+
+        Note: Requires db_session to have Transaction and Customer models imported.
+        """
+        from sqlalchemy.orm import Session
+        from ..db.models import Customer, Transaction
+        from datetime import datetime, timezone
+
+        # Generate data
+        df = self.generate()
+
+        # Extract unique customers and insert with churn metrics
+        customers_df = df[["customer_id", "pattern"]].drop_duplicates()
+        customers_to_insert = []
+
+        for idx, (_, row) in enumerate(customers_df.iterrows()):
+            customer_transactions = df[df["customer_id"] == row["customer_id"]]
+
+            # Get churn pattern and metrics
+            churn_pattern = self._get_churn_pattern(idx)
+            churn_metrics = self._generate_churn_metrics(churn_pattern)
+
+            customer = Customer(
+                id=row["customer_id"],
+                pattern=row["pattern"],
+                first_transaction_date=customer_transactions["date"].min(),
+                last_transaction_date=customer_transactions["date"].max(),
+                # Add churn-related fields
+                credit_limit=churn_metrics["credit_limit"],
+                current_balance=churn_metrics["current_balance"],
+                annual_income=churn_metrics["annual_income"],
+                is_churned=churn_metrics["is_churned"],
+                support_tickets_count=churn_metrics["support_tickets_count"],
+                complaint_severity=churn_metrics["complaint_severity"],
+                campaigns_opened=churn_metrics["campaigns_opened"],
+                campaigns_clicked=churn_metrics["campaigns_clicked"],
+                max_payment_delay_days=churn_metrics["max_payment_delay_days"],
+                total_late_payments=churn_metrics["total_late_payments"],
+            )
+            customers_to_insert.append(customer)
+
+        db_session.bulk_save_objects(customers_to_insert)
+        db_session.commit()
+
+        # Insert transactions in batches
+        transactions_batch = []
+        for _, row in df.iterrows():
+            transaction_dict = {
+                "id": row["transaction_id"],
+                "customer_id": row["customer_id"],
+                "date": row["date"],
+                "amount": row["amount"],
+                "mcc": row["mcc"],
+                "mcc_category": row["mcc_category"],
+                "channel": row["channel"],
+                "merchant": row["merchant"],
+                "country": row["country"],
+                "time_of_day": row["time_of_day"],
+            }
+            transactions_batch.append(transaction_dict)
+
+            if len(transactions_batch) >= batch_size:
+                db_session.bulk_insert_mappings(Transaction, transactions_batch)
+                db_session.commit()
+                transactions_batch = []
+
+        # Insert remaining
+        if transactions_batch:
+            db_session.bulk_insert_mappings(Transaction, transactions_batch)
+            db_session.commit()

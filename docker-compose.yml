@@ -1,0 +1,61 @@
+name: customer-spending-trend-analysis
+
+services:
+  # Backend API Service
+  backend:
+    build: ./backend
+    container_name: spending-analysis-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/spending.db
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+      - MODEL_PATH=/app/ml/models
+      - TRAINING_N_CUSTOMERS=1000
+      - DEMO_N_CUSTOMERS=10
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/app/ml/models:/app/ml/models
+    networks:
+      - ml-poc-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --access-log
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 900s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Frontend Application
+  frontend:
+    build: ./frontend
+    container_name: spending-analysis-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - ml-poc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+networks:
+  ml-poc-network:
+    driver: bridge
+
+volumes:
+  backend-data:
+    driver: local

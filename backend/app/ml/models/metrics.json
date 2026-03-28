@@ -1,0 +1,24 @@
+{
+  "f1": 0.99581589958159,
+  "precision": 1.0,
+  "recall": 0.9916666666666667,
+  "roc_auc": 0.9999074074074075,
+  "training_date": "2026-02-10T17:10:35.155268",
+  "feature_names": [
+    "trend_slope",
+    "spending_volatility",
+    "category_entropy",
+    "transaction_count_trend",
+    "pos_ratio",
+    "online_ratio",
+    "avg_transaction_amount",
+    "utilization_ratio",
+    "dormancy_days",
+    "payment_delay_score",
+    "support_sentiment_score",
+    "campaign_engagement_score",
+    "account_age_months",
+    "balance_to_spending_ratio",
+    "inactive_months_count"
+  ]
+}
