@@ -258,3 +258,104 @@ class ModelVersionResponse(BaseModel):
     available_versions: List[Dict]  # [{"version": "1.0.0", "trained_at": "...", "f1_score": 0.82}]
     training_status: str  # "idle", "training", "evaluating"
     last_retraining: Optional[str] = None
+
+
+# ============================================================================
+# UC-3: Fraud Detection Response Models
+# ============================================================================
+
+class FraudModelTrainResponse(BaseModel):
+    """Response for POST /api/ml/train-fraud-model."""
+    success: bool
+    message: str
+    n_transactions_trained: int
+    contamination_pct: float
+    model_path: str
+    training_timestamp: str
+
+
+class FraudFlagDetail(BaseModel):
+    """Human-readable detail for a single fraud flag."""
+    flag: str          # e.g. "geo_risk"
+    label: str         # e.g. "Geographic Anomaly"
+    explanation: str
+    severity: str      # "HIGH", "MEDIUM", "LOW"
+
+
+class FraudSignalItem(BaseModel):
+    """Single flagged transaction in a fraud-signals response."""
+    tx_id: str
+    date: str
+    amount: float
+    mcc_category: str
+    channel: str
+    country: str
+    fraud_score: float
+    fraud_flags: List[str]
+    flag_details: List[FraudFlagDetail]
+    top_factor: str
+
+
+class FraudSignalsResponse(BaseModel):
+    """Response for GET /api/customers/{id}/fraud-signals."""
+    customer_id: str
+    customer_name: Optional[str]
+    period_days: int
+    total_transactions_analyzed: int
+    flagged_count: int
+    model_status: str   # "trained" or "rule_based_only"
+    signals: List[FraudSignalItem]
+
+
+class BaselineComparison(BaseModel):
+    """Customer baseline statistics vs. the flagged transaction."""
+    avg_amount: float
+    tx_amount: float
+    amount_ratio: float
+    typical_countries: List[str]   # top 3 by frequency
+    tx_country: str
+    typical_hours: List[str]       # top 3 time_of_day values
+    tx_hour: str
+    typical_channels: List[str]
+    tx_channel: str
+
+
+class FraudTransactionDetailResponse(BaseModel):
+    """Response for GET /api/customers/{id}/fraud-signals/{tx_id}."""
+    tx_id: str
+    customer_id: str
+    date: str
+    amount: float
+    mcc_category: str
+    channel: str
+    country: str
+    fraud_score: float
+    fraud_flags: List[str]
+    flag_details: List[FraudFlagDetail]
+    feature_vector: Dict[str, float]   # all 8 features
+    baseline_comparison: BaselineComparison
+    model_status: str
+
+
+class HighRiskTransactionItem(BaseModel):
+    """Single entry in the portfolio high-risk transactions list."""
+    tx_id: str
+    customer_id: str
+    customer_name: Optional[str]
+    date: str
+    amount: float
+    mcc_category: str
+    channel: str
+    country: str
+    fraud_score: float
+    fraud_flags: List[str]
+    top_flag: str
+
+
+class HighRiskTransactionsResponse(BaseModel):
+    """Response for GET /api/ml/fraud/high-risk-transactions."""
+    total_flagged: int
+    returned: int
+    min_score_filter: float
+    model_status: str
+    transactions: List[HighRiskTransactionItem]

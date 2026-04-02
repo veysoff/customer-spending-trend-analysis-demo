@@ -89,6 +89,10 @@ class Transaction(Base):
     country = Column(String(2), nullable=False)
     time_of_day = Column(String(5), nullable=False)
 
+    # Fraud detection fields (UC-3)
+    fraud_score = Column(Float, nullable=True)
+    fraud_flags = Column(String(500), nullable=True)  # JSON list e.g. '["geo_risk","night_activity"]'
+
     # Relationship for back reference
     customer = relationship("Customer", back_populates="transactions")
 

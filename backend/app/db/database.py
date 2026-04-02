@@ -8,12 +8,16 @@ from sqlalchemy.pool import NullPool
 from ..config import DATABASE_URL
 from .models import Base
 
-# Create SQLite engine with NullPool for better concurrent request handling
-# NullPool doesn't pool connections, creating new ones per request (safer for SQLite)
+# Detect database dialect for SQLite-specific configuration
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+# Create engine with dialect-specific configuration
+# SQLite: NullPool for better concurrent ASGI handling, check_same_thread=False for multi-threaded access
+# PostgreSQL: Default pool (QueuePool), standard connection args
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},  # SQLite-specific: allow multi-threaded access
-    poolclass=NullPool,  # No connection pooling for SQLite (safest under concurrent ASGI)
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    poolclass=NullPool if _is_sqlite else None,  # None → SQLAlchemy default (QueuePool for PostgreSQL)
 )
 
 # Session factory
@@ -44,7 +48,9 @@ def create_tables():
     Base.metadata.create_all(bind=engine)
 
     # Enable WAL mode for SQLite to handle concurrent writes better
-    with engine.begin() as connection:
-        connection.execute(text("PRAGMA journal_mode=WAL;"))
-        connection.execute(text("PRAGMA synchronous=NORMAL;"))
-        connection.execute(text("PRAGMA cache_size=10000;"))
+    # These PRAGMA statements are SQLite-specific and should not run on other databases
+    if _is_sqlite:
+        with engine.begin() as connection:
+            connection.execute(text("PRAGMA journal_mode=WAL;"))
+            connection.execute(text("PRAGMA synchronous=NORMAL;"))
+            connection.execute(text("PRAGMA cache_size=10000;"))

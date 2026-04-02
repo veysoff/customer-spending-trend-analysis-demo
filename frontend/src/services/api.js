@@ -92,6 +92,36 @@ export const apiService = {
   async healthCheck() {
     const response = await api.get('/health')
     return response.data
+  },
+
+  // ========== Phase 4: UC-3 Fraud Detection API Methods ==========
+
+  // Train fraud detection model
+  async trainFraudModel() {
+    const response = await api.post('/api/ml/train-fraud-model')
+    return response.data
+  },
+
+  // Get fraud signals for a customer
+  async getFraudSignals(customerId, days = 30, minScore = 0.3, limit = 20) {
+    const response = await api.get(`/api/customers/${customerId}/fraud-signals`, {
+      params: { days, min_score: minScore, limit }
+    })
+    return response.data
+  },
+
+  // Get fraud signal detail for a specific transaction
+  async getFraudTransactionDetail(customerId, txId) {
+    const response = await api.get(`/api/customers/${customerId}/fraud-signals/${txId}`)
+    return response.data
+  },
+
+  // Get high-risk fraud transactions across portfolio
+  async getHighRiskFraudTransactions(limit = 50, minScore = 0.5) {
+    const response = await api.get('/api/ml/fraud/high-risk-transactions', {
+      params: { limit, min_score: minScore }
+    })
+    return response.data
   }
 }
 

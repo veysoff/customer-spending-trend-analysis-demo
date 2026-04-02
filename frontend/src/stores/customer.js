@@ -10,9 +10,12 @@ export const useCustomerStore = defineStore('customer', () => {
   const customerTrends = ref(null)
   const customerAnomalies = ref(null)
   const highRiskCustomers = ref([])
+  const customerFraudSignals = ref(null)
+  const selectedFraudTransactionId = ref(null)
   const loading = ref(false)
   const error = ref(null)
   const dataGenerated = ref(false)
+  const fraudModelStatus = ref('rule_based_only')
 
   // Cache for customer data to prevent redundant API calls
   const dataCache = new Map()
@@ -62,6 +65,7 @@ export const useCustomerStore = defineStore('customer', () => {
         customerProfile.value = cached.profile
         customerTrends.value = cached.trends
         customerAnomalies.value = cached.anomalies
+        customerFraudSignals.value = cached.fraudSignals || null
         console.log(`[Cache] Loaded ${customerId} from cache (avoiding redundant API calls)`)
       }
       return
@@ -76,10 +80,14 @@ export const useCustomerStore = defineStore('customer', () => {
     }
 
     try {
-      const [profile, trends, anomalies] = await Promise.all([
+      const [profile, trends, anomalies, fraudSignals] = await Promise.all([
         apiService.getCustomerProfile(customerId),
         apiService.getCustomerTrends(customerId),
-        apiService.getCustomerAnomalies(customerId)
+        apiService.getCustomerAnomalies(customerId),
+        apiService.getFraudSignals(customerId, 30, 0.3, 20).catch(err => {
+          console.warn('Failed to load fraud signals:', err)
+          return { signals: [] }
+        })
       ])
 
       // SAFETY: Double-check selection hasn't changed during API call
@@ -91,9 +99,10 @@ export const useCustomerStore = defineStore('customer', () => {
       customerProfile.value = profile
       customerTrends.value = trends
       customerAnomalies.value = anomalies
+      customerFraudSignals.value = fraudSignals
 
       // Cache the data for future selections
-      dataCache.set(customerId, { profile, trends, anomalies })
+      dataCache.set(customerId, { profile, trends, anomalies, fraudSignals })
       console.log(`[Cache] Stored ${customerId} in cache for future selections`)
     } catch (err) {
       // SAFETY: Only set error if this is still the selected customer
@@ -149,6 +158,21 @@ export const useCustomerStore = defineStore('customer', () => {
     console.log('[Cache] Cleared all cached customer data')
   }
 
+  // Select fraud transaction for detail view
+  function selectFraudTransaction(txId) {
+    selectedFraudTransactionId.value = txId
+  }
+
+  // Update fraud model status (called after training)
+  function setFraudModelStatus(status) {
+    fraudModelStatus.value = status
+  }
+
+  // Get fraud model status (for display in UI)
+  function getFraudModelStatus() {
+    return fraudModelStatus.value
+  }
+
   return {
     // State
     customers,
@@ -157,9 +181,12 @@ export const useCustomerStore = defineStore('customer', () => {
     customerTrends,
     customerAnomalies,
     highRiskCustomers,
+    customerFraudSignals,
+    selectedFraudTransactionId,
     loading,
     error,
     dataGenerated,
+    fraudModelStatus,
 
     // Computed
     selectedCustomer,
@@ -170,6 +197,9 @@ export const useCustomerStore = defineStore('customer', () => {
     loadCustomerData,
     loadCustomers,
     loadHighRiskCustomers,
-    clearDataCache
+    clearDataCache,
+    selectFraudTransaction,
+    setFraudModelStatus,
+    getFraudModelStatus
   }
 })

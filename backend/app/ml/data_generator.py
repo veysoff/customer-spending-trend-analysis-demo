@@ -25,10 +25,11 @@ class SyntheticDataGenerator:
                  "McDonald's", "Boots", "John Lewis", "Argos", "Next", "M&S"]
     COUNTRIES = ["GB", "US", "FR", "DE", "ES"]
 
-    def __init__(self, n_customers: int = 1000, n_months: int = 12, seed: int = 42):
+    def __init__(self, n_customers: int = 1000, n_months: int = 12, seed: int = 42, customer_id_offset: int = 0):
         self.n_customers = n_customers
         self.n_months = n_months
         self.seed = seed
+        self.customer_id_offset = customer_id_offset
         # Use a local random generator to avoid affecting global numpy state
         self.rng = np.random.default_rng(seed)
         # Calculate start date: n_months ago from today
@@ -140,6 +141,90 @@ class SyntheticDataGenerator:
 
         return transactions
 
+    # High-risk foreign countries not present in the normal COUNTRIES list
+    _FRAUD_COUNTRIES = ["AE", "CN", "RU", "NG", "UA"]
+
+    def inject_fraud_patterns(
+        self, customer_id: str, transactions: List[dict]
+    ) -> List[dict]:
+        """Inject synthetic fraud event sequences into a customer's transaction list.
+
+        Picks one or two patterns at random (seeded) to inject per affected customer.
+        Does NOT set fraud_score / fraud_flags — those are set at inference time.
+
+        Patterns:
+        - geo_jump:       2-3 transactions with a foreign country within a normal date
+        - card_testing:   3 micro-transactions (<5 AED) + 1 large (900 AED) same time slot
+        - night_cluster:  replace time_of_day of 5 existing transactions with early-morning times
+        - merchant_drift: 3 transactions in a high-risk MCC category (CASINO / PAWN_SHOP)
+
+        Returns the modified transactions list (with injected entries appended / modified).
+        """
+        if not transactions:
+            return transactions
+
+        # Work on a copy so the original is not mutated before we decide
+        txs = list(transactions)
+
+        # Pick 1-2 patterns
+        all_patterns = ["geo_jump", "card_testing", "night_cluster", "merchant_drift"]
+        n_patterns = int(self.rng.integers(1, 3))
+        chosen_indices = self.rng.choice(len(all_patterns), size=n_patterns, replace=False)
+        chosen = [all_patterns[i] for i in chosen_indices]
+
+        base_tx = txs[0]  # use first transaction as a template for new entries
+
+        for pattern in chosen:
+            if pattern == "geo_jump":
+                # Insert 2-3 transactions with a foreign high-risk country
+                foreign_country = str(self.rng.choice(self._FRAUD_COUNTRIES))
+                ref = txs[int(self.rng.integers(0, len(txs)))]
+                for _ in range(int(self.rng.integers(2, 4))):
+                    new_tx = dict(ref)
+                    new_tx["country"] = foreign_country
+                    new_tx["amount"] = round(float(self.rng.uniform(50, 500)), 2)
+                    txs.append(new_tx)
+
+            elif pattern == "card_testing":
+                # 3 micro-transactions then 1 large transaction
+                ref = txs[int(self.rng.integers(0, len(txs)))]
+                for micro_amount in [2.50, 3.00, 4.50]:
+                    micro = dict(ref)
+                    micro["amount"] = micro_amount
+                    micro["time_of_day"] = "03:00"
+                    micro["mcc"] = "5411"
+                    micro["mcc_category"] = "GROCERY"
+                    txs.append(micro)
+                large = dict(ref)
+                large["amount"] = 900.00
+                large["time_of_day"] = "03:15"
+                large["mcc"] = "5411"
+                large["mcc_category"] = "GROCERY"
+                txs.append(large)
+
+            elif pattern == "night_cluster":
+                # Replace time_of_day of up to 5 existing transactions with early-morning
+                night_times = ["01:30", "02:00", "02:45", "03:10", "04:05"]
+                indices_to_modify = self.rng.choice(
+                    len(txs), size=min(5, len(txs)), replace=False
+                )
+                for i, idx in enumerate(indices_to_modify):
+                    txs[idx] = dict(txs[idx])
+                    txs[idx]["time_of_day"] = night_times[i % len(night_times)]
+
+            elif pattern == "merchant_drift":
+                # 3 transactions in a high-risk MCC category
+                ref = txs[int(self.rng.integers(0, len(txs)))]
+                drift_cat = str(self.rng.choice(["CASINO", "PAWN_SHOP"]))
+                for _ in range(3):
+                    drift = dict(ref)
+                    drift["mcc_category"] = drift_cat
+                    drift["mcc"] = "9999"  # placeholder MCC for non-standard category
+                    drift["amount"] = round(float(self.rng.uniform(150, 250)), 2)
+                    txs.append(drift)
+
+        return txs
+
     def _shift_categories(self, mcc_list: List[str]) -> List[str]:
         """Shift category distribution for lifestyle shift."""
         # Increase GROCERY, decrease RESTAURANTS and AIRLINES
@@ -159,11 +244,16 @@ class SyntheticDataGenerator:
         records = []
 
         for cust_idx in range(self.n_customers):
-            customer_id = f"customer_{cust_idx:06d}"
+            customer_id = f"customer_{(cust_idx + self.customer_id_offset):06d}"
             pattern = self._get_pattern_type(cust_idx)
+            tx_counter = 0  # Local transaction counter per customer
 
             # Track transactions for lifestyle shift category change
             month_mccs = {m: [] for m in range(1, self.n_months + 1)}
+
+            # Collect all transaction dicts for this customer across all months
+            # so inject_fraud_patterns can operate on the complete list
+            customer_tx_dicts: List[dict] = []
 
             for month in range(1, self.n_months + 1):
                 monthly_spending = self._generate_monthly_spending(pattern, month)
@@ -191,21 +281,27 @@ class SyntheticDataGenerator:
 
                     date_obj = datetime(year, month_num, safe_day, hour, minute)
 
-                    records.append({
-                        "transaction_id": str(uuid.uuid4()),
+                    tx_dict = {
+                        "transaction_id": None,  # Will be assigned after sorting in save_to_db
                         "customer_id": customer_id,
                         "date": date_obj.strftime("%Y-%m-%d"),
                         "amount": round(amount, 2),
                         "mcc": mcc,
-                        "mcc_category": self.MCC_CATEGORIES[mcc],
+                        "mcc_category": self.MCC_CATEGORIES.get(mcc, mcc),
                         "channel": channel,
                         "merchant": merchant,
                         "country": country,
                         "time_of_day": date_obj.strftime("%H:%M"),
                         "pattern": pattern,
-                    })
-
+                    }
+                    customer_tx_dicts.append(tx_dict)
                     month_mccs[month].append(mcc)
+
+            # UC-3: inject synthetic fraud patterns for ~5% of customers
+            if self.rng.random() < 0.05:
+                customer_tx_dicts = self.inject_fraud_patterns(customer_id, customer_tx_dicts)
+
+            records.extend(customer_tx_dicts)
 
         df = pd.DataFrame(records)
         df["date"] = pd.to_datetime(df["date"])
@@ -350,11 +446,24 @@ class SyntheticDataGenerator:
         db_session.bulk_save_objects(customers_to_insert)
         db_session.commit()
 
+        # Assign transaction IDs after sorting
+        tx_counter_by_customer = {}
+        transaction_ids = []
+        for _, row in df.iterrows():
+            cust_id = row["customer_id"]
+            if cust_id not in tx_counter_by_customer:
+                tx_counter_by_customer[cust_id] = 0
+            tx_id = f"bg-{cust_id}-{tx_counter_by_customer[cust_id]}"
+            tx_counter_by_customer[cust_id] += 1
+            transaction_ids.append(tx_id)
+
+        df["id"] = transaction_ids
+
         # Insert transactions in batches
         transactions_batch = []
         for _, row in df.iterrows():
             transaction_dict = {
-                "id": row["transaction_id"],
+                "id": row["id"],
                 "customer_id": row["customer_id"],
                 "date": row["date"],
                 "amount": row["amount"],

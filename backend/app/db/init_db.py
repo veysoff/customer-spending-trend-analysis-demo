@@ -2,9 +2,9 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import func
+from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session
-from .database import SessionLocal, create_tables
+from .database import SessionLocal, create_tables, engine
 from .models import Customer, Transaction
 from ..ml.persona_registry import PERSONA_REGISTRY
 from ..ml.data_generator import SyntheticDataGenerator
@@ -42,6 +42,23 @@ def _backfill_transaction_dates(db: Session) -> int:
     return updated
 
 
+def _migrate_add_fraud_columns(engine_ref) -> None:
+    """Idempotent migration: add fraud_score and fraud_flags to transactions table.
+
+    create_all() does not add columns to existing tables. This inspects the schema
+    and runs ALTER TABLE only when the columns are absent.
+    """
+    inspector = inspect(engine_ref)
+    existing = [col["name"] for col in inspector.get_columns("transactions")]
+    with engine_ref.begin() as conn:
+        if "fraud_score" not in existing:
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN fraud_score REAL"))
+            logger.info("Added fraud_score column to transactions")
+        if "fraud_flags" not in existing:
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN fraud_flags TEXT"))
+            logger.info("Added fraud_flags column to transactions")
+
+
 def initialize_database():
     """Create tables and seed demo personas + synthetic data if empty (idempotent).
 
@@ -61,6 +78,9 @@ def initialize_database():
     logger.info("Creating database tables...")
     create_tables()
     logger.info("Database tables created")
+
+    # UC-3: idempotent fraud column migration (create_all does not add new columns)
+    _migrate_add_fraud_columns(engine)
 
     # Check if data already exists
     db = SessionLocal()
@@ -222,7 +242,8 @@ def _generate_synthetic_data_with_churn(db: Session, n_customers: int = None, ba
     )
 
     # Generate synthetic data using calculated values
-    generator = SyntheticDataGenerator(n_customers=n_to_generate, n_months=config.N_MONTHS, seed=42)
+    # Use offset=55 to avoid collision with 55 demo personas (customer_000001 to customer_000055)
+    generator = SyntheticDataGenerator(n_customers=n_to_generate, n_months=config.N_MONTHS, seed=123, customer_id_offset=55)
 
     logger.info("Saving synthetic data to database...")
     generator.save_to_db(db)

@@ -43,6 +43,10 @@
                 <span class="bg-red-200 text-red-900 px-2 py-0.5 rounded font-bold text-xs">[UC-2]</span>
                 <span class="text-xs font-medium text-red-900">Churn</span>
               </div>
+              <div class="inline-flex items-center gap-2 px-3 py-1.5 bg-orange-50 border border-orange-200 rounded-md hover:bg-orange-100 transition-colors" title="Fraud Pattern Detection - Transaction-level risk scoring, pattern identification, portfolio view">
+                <span class="bg-orange-200 text-orange-900 px-2 py-0.5 rounded font-bold text-xs">[UC-3]</span>
+                <span class="text-xs font-medium text-orange-900">Fraud</span>
+              </div>
             </div>
           </div>
 
@@ -234,13 +238,50 @@
             </div>
           </div>
 
+          <!-- BLOCK C: Fraud Pattern Detection (UC-3) -->
+          <div class="space-y-6 mb-8">
+            <!-- UC-3 Badge & Info Toggle -->
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span class="bg-orange-200 text-orange-900 px-3 py-1 rounded-full font-bold text-sm">[UC-3]</span>
+                <span class="text-xs text-gray-600 font-medium">Fraud Pattern Detection</span>
+              </div>
+              <button
+                @click="showUC3Info = !showUC3Info"
+                class="text-xs text-orange-600 hover:text-orange-800 font-semibold flex items-center gap-1"
+              >
+                ℹ️ {{ showUC3Info ? 'Hide' : 'Info' }}
+              </button>
+            </div>
+
+            <!-- UC-3 Info Panel (Collapsible) -->
+            <div v-if="showUC3Info" class="bg-orange-50 border-l-4 border-orange-500 p-4 rounded text-sm text-gray-700 mb-4">
+              <p><strong>Purpose:</strong> Detect fraudulent transactions through ML-based pattern recognition</p>
+              <p class="mt-2"><strong>Data Source:</strong> Individual transaction features (8 dimensions)</p>
+              <p class="mt-2"><strong>Model:</strong> Isolation Forest (200 estimators); 60% IF + 40% rule-based hybrid</p>
+              <p class="mt-2"><strong>Explainability:</strong> Feature vector + baseline comparison per transaction</p>
+              <p class="mt-2"><strong>Update Frequency:</strong> Real-time per transaction</p>
+            </div>
+
+            <!-- Header -->
+            <div class="bg-gradient-to-r from-orange-50 to-amber-50 p-6 rounded-lg border-2 border-orange-300">
+              <h2 class="text-xl font-bold text-gray-900 mb-2">🚨 Fraud Pattern Detection</h2>
+              <p class="text-sm text-gray-600">UC-3: Transaction-level fraud risk scoring, pattern identification, anomaly detection</p>
+              <div class="text-xs text-gray-500 mt-3 flex gap-4">
+                <span>🤖 Isolation Forest (IF + Rules)</span>
+                <span>📊 8 Features per Transaction</span>
+                <span>⚡ Real-time</span>
+              </div>
+            </div>
+          </div>
+
           <!-- VISUALIZATION TABS (below fold) -->
           <div class="mb-8">
             <div class="bg-white rounded-lg border-2 border-gray-300 p-6">
               <div class="mb-6">
                 <h2 class="text-lg font-bold text-gray-900 mb-2">📈 Detailed Analysis</h2>
                 <p class="text-sm text-gray-600">
-                  Select visualization to explore <span class="text-green-600 font-semibold">[UC-1]</span> trends or <span class="text-red-600 font-semibold">[UC-2]</span> risk drivers in detail
+                  Select visualization to explore <span class="text-green-600 font-semibold">[UC-1]</span> trends, <span class="text-red-600 font-semibold">[UC-2]</span> risk drivers, or <span class="text-orange-600 font-semibold">[UC-3]</span> fraud signals in detail
                 </p>
               </div>
 
@@ -275,6 +316,20 @@
                   <span class="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded font-bold">[UC-2]</span>
                   Features
                 </button>
+
+                <!-- UC-3 Tab (Orange) -->
+                <button
+                  @click="activeVizTab = 'Fraud'"
+                  :class="[
+                    'px-4 py-2 font-semibold border-b-2 transition-colors flex items-center gap-2',
+                    activeVizTab === 'Fraud'
+                      ? 'border-orange-600 text-orange-600'
+                      : 'border-transparent text-gray-600 hover:text-gray-900'
+                  ]"
+                >
+                  <span class="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded font-bold">[UC-3]</span>
+                  Fraud
+                </button>
               </div>
 
               <!-- Tab Description -->
@@ -285,6 +340,9 @@
                 <template v-else-if="activeVizTab === 'Features'">
                   <span class="text-red-600 font-semibold">[UC-2]</span> All 15 engineered features and their importance in churn prediction model
                 </template>
+                <template v-else-if="activeVizTab === 'Fraud'">
+                  <span class="text-orange-600 font-semibold">[UC-3]</span> Transaction-level fraud risk scoring with ML-based pattern detection
+                </template>
               </div>
 
               <!-- Tab Content -->
@@ -292,6 +350,12 @@
                 <TrendChart v-if="activeVizTab === 'Trends' && store.customerTrends" :trends="store.customerTrends" />
                 <AnomalyAlert v-else-if="activeVizTab === 'Anomalies' && store.customerAnomalies" :anomalies="store.customerAnomalies" />
                 <FeatureImportanceChart v-if="activeVizTab === 'Features' && store.selectedCustomerId" :customerId="store.selectedCustomerId" />
+                <FraudSignalsTable
+                  v-if="activeVizTab === 'Fraud' && store.selectedCustomerId"
+                  :customerId="store.selectedCustomerId"
+                  :modelStatus="store.fraudModelStatus"
+                  @select-transaction="selectFraudTransaction"
+                />
               </div>
             </div>
           </div>
@@ -318,6 +382,24 @@
         </div>
       </main>
 
+      <!-- Fraud Transaction Detail Modal -->
+      <div
+        v-if="store.selectedFraudTransactionId && activeVizTab === 'Fraud'"
+        class="fixed inset-0 bg-black bg-opacity-50 z-40 flex items-center justify-center p-4 overflow-y-auto"
+        @click="store.selectedFraudTransactionId = null"
+      >
+        <div
+          class="bg-white rounded-lg shadow-lg max-w-2xl w-full my-8"
+          @click.stop
+        >
+          <FraudTransactionDetail
+            v-if="store.selectedCustomerId && store.selectedFraudTransactionId"
+            :customerId="store.selectedCustomerId"
+            :transactionId="store.selectedFraudTransactionId"
+            @close="store.selectedFraudTransactionId = null"
+          />
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -331,6 +413,8 @@ import AnomalyAlert from './components/AnomalyAlert.vue'
 import HighRiskTable from './components/HighRiskTable.vue'
 import ChurnPredictionCard from './components/ChurnPredictionCard.vue'
 import FeatureImportanceChart from './components/FeatureImportanceChart.vue'
+import FraudSignalsTable from './components/FraudSignalsTable.vue'
+import FraudTransactionDetail from './components/FraudTransactionDetail.vue'
 
 const store = useCustomerStore()
 const highRiskLoaded = ref(false)
@@ -340,6 +424,7 @@ const visualizationTabs = ['Trends', 'Anomalies', 'Risk Drivers', 'Features']
 // UC Info Panel Toggles
 const showUC1Info = ref(false)  // UC-1 Spending Trends info
 const showUC2Info = ref(false)  // UC-2 Churn Prediction info
+const showUC3Info = ref(false)  // UC-3 Fraud Pattern info
 
 // Customer dropdown state
 const dropdownOpen = ref(false)
@@ -389,6 +474,10 @@ function selectAndClose(customerId) {
   store.selectCustomer(customerId)
   dropdownOpen.value = false
   customerSearch.value = ''
+}
+
+function selectFraudTransaction(txId) {
+  store.selectFraudTransaction(txId)
 }
 
 // Close dropdown when clicking outside

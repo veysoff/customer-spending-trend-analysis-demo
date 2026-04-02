@@ -4,8 +4,11 @@ import numpy as np
 import pandas as pd
 import pickle
 import logging
+import shutil
+import json
 from typing import Tuple, Dict, Any
 from datetime import datetime, timezone
+from pathlib import Path
 
 from xgboost import XGBClassifier
 from sklearn.model_selection import train_test_split
@@ -30,6 +33,30 @@ from .. import config
 
 
 logger = logging.getLogger(__name__)
+
+
+def _prune_model_versions(directory: Path, prefix: str, keep: int) -> None:
+    """Delete all but the `keep` most recent versioned model files matching `prefix*`.
+
+    Args:
+        directory: Directory containing versioned model files
+        prefix: File prefix to match (e.g., "churn_model_")
+        keep: Number of most recent versions to retain
+    """
+    try:
+        # Collect all pkl and json files matching the prefix
+        pkl_files = sorted(directory.glob(f"{prefix}*.pkl"), key=lambda p: p.stat().st_mtime)
+        json_files = sorted(directory.glob(f"{prefix}*.json"), key=lambda p: p.stat().st_mtime)
+
+        # Combine and deduplicate, then sort by modification time
+        all_files = sorted(set(pkl_files + json_files), key=lambda p: p.stat().st_mtime)
+
+        # Delete all but the most recent `keep` files
+        for old_file in all_files[:-keep]:
+            old_file.unlink(missing_ok=True)
+            logger.info(f"Pruned old model version: {old_file.name}")
+    except Exception as e:
+        logger.warning(f"Error pruning model versions: {e}")
 
 
 class ChurnModelTrainer:
@@ -157,10 +184,13 @@ class ChurnModelTrainer:
         logger.info("Training XGBoost model...")
 
         # Calculate scale_pos_weight to handle class imbalance
-        # scale_pos_weight = count(negative examples) / count(positive examples)
+        # Only apply when negative class (0) is majority to upweight the minority positive class
         n_negative = (y_train == 0).sum()
         n_positive = (y_train == 1).sum()
-        scale_pos_weight = n_negative / n_positive if n_positive > 0 else 1.0
+        if n_positive > 0 and n_positive < n_negative:
+            scale_pos_weight = n_negative / n_positive
+        else:
+            scale_pos_weight = 1.0  # classes balanced or churned is majority
 
         logger.info(f"Class imbalance: {n_negative} negative, {n_positive} positive")
         logger.info(f"Scale pos weight: {scale_pos_weight:.2f}")
@@ -274,52 +304,80 @@ class ChurnModelTrainer:
             logger.warning(f"Failed to generate SHAP values: {e}")
 
     def save_model(self) -> None:
-        """Save trained model, scaler, and metrics to disk."""
+        """Save trained model, scaler, and metrics to disk with timestamped versioning.
+
+        Creates timestamped versioned copies and updates "latest" pointer files.
+        Automatically prunes old versions, keeping only the 3 most recent.
+        """
         self.MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Save model
-        with open(self.MODEL_PATH, 'wb') as f:
+        # Generate timestamp for this version
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+        # Define versioned file paths
+        versioned_model = self.MODEL_DIR / f"churn_model_{ts}.pkl"
+        versioned_scaler = self.MODEL_DIR / f"feature_scaler_{ts}.pkl"
+        versioned_metrics = self.MODEL_DIR / f"metrics_{ts}.json"
+
+        # Save versioned model
+        with open(versioned_model, 'wb') as f:
             pickle.dump(self.model, f)
-        logger.info(f"Model saved to {self.MODEL_PATH}")
+        logger.info(f"Model saved to versioned file: {versioned_model.name}")
 
-        # Save scaler
-        with open(self.SCALER_PATH, 'wb') as f:
+        # Save versioned scaler
+        with open(versioned_scaler, 'wb') as f:
             pickle.dump(self.scaler, f)
-        logger.info(f"Scaler saved to {self.SCALER_PATH}")
+        logger.info(f"Scaler saved to versioned file: {versioned_scaler.name}")
 
-        # Save metrics
+        # Prepare metrics with timestamp and version info
         metrics_with_timestamp = {
             **self.metrics,
             'training_date': datetime.now(timezone.utc).isoformat(),
             'feature_names': self.feature_names,
+            'version': ts,
         }
 
-        import json
-        with open(self.METRICS_PATH, 'w') as f:
+        # Save versioned metrics
+        with open(versioned_metrics, 'w') as f:
             json.dump(metrics_with_timestamp, f, indent=2)
-        logger.info(f"Metrics saved to {self.METRICS_PATH}")
+        logger.info(f"Metrics saved to versioned file: {versioned_metrics.name}")
+
+        # Update "latest" pointer files (these are what the inference code uses)
+        shutil.copy2(versioned_model, self.MODEL_PATH)
+        shutil.copy2(versioned_scaler, self.SCALER_PATH)
+        shutil.copy2(versioned_metrics, self.METRICS_PATH)
+        logger.info(f"Latest pointers updated (version {ts})")
+
+        # Prune old versions, keeping only the 3 most recent
+        _prune_model_versions(self.MODEL_DIR, prefix="churn_model_", keep=3)
+        _prune_model_versions(self.MODEL_DIR, prefix="feature_scaler_", keep=3)
+        _prune_model_versions(self.MODEL_DIR, prefix="metrics_", keep=3)
 
     def predict_batch(self, customers: list, db) -> list:
         """Predict churn for all customers in a single vectorized call.
 
-        Collects all feature vectors first, then runs a single predict_proba()
-        call instead of one per customer. Reduces batch prediction time from ~30s
+        OPTIMIZED: Uses bulk feature engineering to load all transactions once (1 DB query)
+        instead of N separate queries for N customers. Reduces batch prediction time from ~30s
         to under 5s for 1000 customers.
 
         Returns:
             List of tuples: (customer, prediction, probabilities, features_dict)
         """
+        if not customers:
+            return []
+
+        # OPTIMIZATION: Bulk load all features with single DB query
+        features_map = ChurnFeatureEngineer.engineer_churn_features_bulk(customers, db)
+
         rows = []
         valid_customers = []
 
         for customer in customers:
-            try:
-                features_dict = ChurnFeatureEngineer.engineer_churn_features(customer.id, db)
-                rows.append(features_dict)
+            if customer.id in features_map:
+                rows.append(features_map[customer.id])
                 valid_customers.append(customer)
-            except Exception as e:
-                logger.warning("Failed to engineer features for customer %s: %s", customer.id, e)
-                continue
+            else:
+                logger.warning("Feature engineering failed for customer %s", customer.id)
 
         if not rows:
             return []
